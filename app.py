@@ -780,23 +780,28 @@ def get_live_prices() -> pd.DataFrame:
         _DATA_SOURCE = f"CSV failed: {e}"
 
     # ── Cloud fallback: build minimal df from _GSE_NAMES so app isn't blank ──
-    st.warning(
-        "⚠️ Live data temporarily unavailable. Showing cached company list. "
-        "The GSE API may be down or rate-limiting. Retrying in 15 minutes.",
-        icon="📡"
-    )
-    # Return stub data from company database so UI still renders
-    stub_rows = []
-    for sym, info in _GSE_COMPANIES.items():
-        stub_rows.append({
-            "symbol": sym,
-            "name":   info.get("name", sym),
-            "price":  0.0,
-            "change": 0.0,
-            "volume": 0,
-        })
-    return pd.DataFrame(stub_rows) if stub_rows else pd.DataFrame(
-        columns=["symbol", "name", "price", "change", "volume"])
+    # Try local CSV/Excel before returning zeros
+    for _p in ["gse_history.csv", "gse_history.xlsx"]:
+        try:
+            _h = pd.read_excel(_p, engine="openpyxl") if _p.endswith(".xlsx") else pd.read_csv(_p)
+            _h.columns = [c.lower().strip() for c in _h.columns]
+            if "date" in _h.columns:
+                _h["date"] = pd.to_datetime(_h["date"], errors="coerce")
+                _h = _h[_h["date"] == _h["date"].max()]
+            _sc = "symbol" if "symbol" in _h.columns else "name"
+            _h  = _h.rename(columns={_sc: "symbol"})
+            for _c in ["change","volume"]:
+                if _c not in _h.columns: _h[_c] = 0
+            _h["price"]  = pd.to_numeric(_h["price"],  errors="coerce").fillna(0)
+            _h["change"] = pd.to_numeric(_h["change"], errors="coerce").fillna(0)
+            if not _h.empty and _h["price"].sum() > 0:
+                return _h[["symbol","price","change","volume"]].reset_index(drop=True)
+        except Exception:
+            continue
+    return pd.DataFrame([
+        {"symbol": s, "name": i.get("name", s), "price": 0.0, "change": 0.0, "volume": 0}
+        for s, i in _GSE_COMPANIES.items()
+    ])
 
 
 # ── Daily CSV snapshot ───────────────────────────────────────────────────────
@@ -2268,11 +2273,18 @@ if page == "Overview":
 
 elif page == "Stock Detail":
     if not symbols:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     st.markdown("""
     <style>
@@ -2696,11 +2708,18 @@ elif page == "Sector Analysis":
     st.caption("Click any bubble to open full stock detail")
 
     if df_live.empty:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     # Build sector groups
     df_s = df_live.copy()
@@ -2839,11 +2858,18 @@ elif page == "Compare Stocks":
     st.caption("Side-by-side normalised price performance")
 
     if not symbols:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     with st.sidebar:
         st.divider()
@@ -3180,11 +3206,18 @@ elif page == "Advanced Charts":
     </style>""", unsafe_allow_html=True)
 
     if not symbols:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     # ── Controls in sidebar ───────────────────────────────────────────────────
     with st.sidebar:
@@ -3472,11 +3505,18 @@ elif page == "Market Review":
     </div>""", unsafe_allow_html=True)
 
     if df_live.empty:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     summary = market_summary(df_live)
     total_vol = summary.get("total_volume", 0)
@@ -3663,11 +3703,18 @@ elif page == "Heatmap":
     st.caption("Block size = trading volume · Colour intensity = % change")
 
     if df_live.empty:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     df_hm = df_live.copy()
     df_hm["name"] = df_hm.apply(
@@ -3761,11 +3808,18 @@ elif page == "AI Signals":
     st.caption("Composite signals from RSI · MACD · Momentum · SMA — updated each session")
 
     if df_live.empty:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     # Compute signals for all stocks with a spinner
     with st.spinner("Computing signals for all equities…"):
@@ -3909,11 +3963,18 @@ elif page == "Portfolio Simulator":
     st.caption("Simulate historical returns for any GSE stock")
 
     if not symbols:
-        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
-    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
-    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
-    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
-    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
+        st.markdown("""
+    <div style="background:#0c1a0c;border:1px solid #166534;border-radius:10px;
+         padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">📡</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80">Connecting to GSE API…</div>
+        <div style="font-size:11px;color:#334155;margin-top:3px">
+          Run the app locally once during GSE market hours (10:00–15:00 GMT),
+          then push <code>gse_history.csv</code> to GitHub — cloud app loads from that file.
+          <b>Click Refresh data to retry.</b></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
     # ── Input form ─────────────────────────────────────────────────────────────
     with st.container():
