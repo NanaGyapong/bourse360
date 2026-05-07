@@ -98,7 +98,26 @@ _B360_MARK_ONLY = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"
 
 GSE_API     = "https://dev.kwayisi.org/apis/gse"
 FALLBACK_URL = "https://african-markets.com/en/stock-markets/gse/listed-companies"
-HEADERS     = {"User-Agent": "Mozilla/5.0 (Bourse360 App)"}
+HEADERS     = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/html, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache",
+}
+
+def _safe_get(url: str, timeout: int = 20, retries: int = 3) -> requests.Response | None:
+    """Robust HTTP GET with retries — handles cloud network latency."""
+    import time
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)  # exponential backoff: 1s, 2s, 4s
+            continue
+    return None
 
 # SECTOR_MAP defined below after _GSE_COMPANIES
 
@@ -620,8 +639,9 @@ def _fetch_all_company_names(symbols: list) -> dict:
     """Start with hardcoded map, then enrich from API /equities endpoint."""
     names = dict(_GSE_NAMES)  # start with known names
     try:
-        resp = requests.get(f"{GSE_API}/equities", headers=HEADERS, timeout=10)
-        resp.raise_for_status()
+        resp = _safe_get(f"{GSE_API}/equities", timeout=20)
+        if resp is None:
+            return names
         for item in resp.json():
             raw = {k.lower(): v for k, v in item.items()}
             # API returns ticker in "name" field
@@ -699,12 +719,13 @@ _LAST_RAW_SAMPLE: list = []
 _DATA_SOURCE: str     = "none"
 
 
+@st.cache_data(ttl=900, show_spinner="Loading live market data…")
 def get_live_prices() -> pd.DataFrame:
     """
     Source priority:
       1. GSE API /live  (tickers in "name" col, company names from /equities)
       2. african-markets.com scrape
-      3. gse_history.csv (most recent date)
+      3. gse_history.csv / gse_history.xlsx (most recent date as fallback)
     """
     global _LAST_RAW_COLS, _LAST_RAW_SAMPLE, _DATA_SOURCE
 
@@ -713,15 +734,17 @@ def get_live_prices() -> pd.DataFrame:
 
     # ── 1. GSE API ────────────────────────────────────────────────────────────
     try:
-        resp = requests.get(f"{GSE_API}/live", headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        raw = pd.DataFrame(resp.json())
-        _LAST_RAW_COLS   = raw.columns.tolist()
-        _LAST_RAW_SAMPLE = raw.head(3).to_dict("records")
-        _DATA_SOURCE     = "GSE API"
-        result = _build_df(raw, company_names)
-        if not result.empty:
-            return result
+        resp = _safe_get(f"{GSE_API}/live", timeout=20)
+        if resp is not None:
+            raw = pd.DataFrame(resp.json())
+            _LAST_RAW_COLS   = raw.columns.tolist()
+            _LAST_RAW_SAMPLE = raw.head(3).to_dict("records")
+            _DATA_SOURCE     = "GSE API"
+            result = _build_df(raw, company_names)
+            if not result.empty:
+                return result
+        else:
+            _DATA_SOURCE = "GSE API unreachable"
     except Exception as e:
         _DATA_SOURCE = f"GSE API failed: {e}"
 
@@ -756,7 +779,24 @@ def get_live_prices() -> pd.DataFrame:
     except Exception as e:
         _DATA_SOURCE = f"CSV failed: {e}"
 
-    return pd.DataFrame(columns=["symbol", "name", "price", "change", "volume"])
+    # ── Cloud fallback: build minimal df from _GSE_NAMES so app isn't blank ──
+    st.warning(
+        "⚠️ Live data temporarily unavailable. Showing cached company list. "
+        "The GSE API may be down or rate-limiting. Retrying in 15 minutes.",
+        icon="📡"
+    )
+    # Return stub data from company database so UI still renders
+    stub_rows = []
+    for sym, info in _GSE_COMPANIES.items():
+        stub_rows.append({
+            "symbol": sym,
+            "name":   info.get("name", sym),
+            "price":  0.0,
+            "change": 0.0,
+            "volume": 0,
+        })
+    return pd.DataFrame(stub_rows) if stub_rows else pd.DataFrame(
+        columns=["symbol", "name", "price", "change", "volume"])
 
 
 # ── Daily CSV snapshot ───────────────────────────────────────────────────────
@@ -850,11 +890,9 @@ def get_history(symbol: str) -> pd.DataFrame:
 
     # ── 2. GSE API EOD (online supplement) ────────────────────────────────────
     try:
-        resp = requests.get(
-            f"{GSE_API}/equities/{symbol.lower()}/eod",
-            headers=HEADERS, timeout=10,
-        )
-        resp.raise_for_status()
+        resp = _safe_get(f"{GSE_API}/equities/{symbol.lower()}/eod", timeout=20)
+        if resp is None:
+            raise Exception("API unreachable")
         df = _normalise_columns(pd.DataFrame(resp.json()))
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
@@ -1190,6 +1228,22 @@ if not df_live.empty:
     df_live = _normalise_change(df_live)
     # Auto-save today's snapshot to CSV for historical comparison
     save_daily_snapshot(df_live)
+else:
+    # ── Hard fallback: build stub df from company database ─────────────────
+    # This ensures the app ALWAYS renders even when all APIs are unreachable
+    # Prices default to 0 — user sees company list but no live data
+    _stub = []
+    for _sym, _info in _GSE_COMPANIES.items():
+        _stub.append({
+            "symbol": _sym,
+            "name":   _info.get("name", _sym),
+            "price":  0.0,
+            "change": 0.0,
+            "volume": 0,
+        })
+    if _stub:
+        df_live = pd.DataFrame(_stub)
+
 symbols = sorted(df_live["symbol"].dropna().tolist()) if not df_live.empty else []
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1579,9 +1633,22 @@ if page == "Overview":
     </style>
     """, unsafe_allow_html=True)
 
-    if df_live.empty:
-        st.error("Could not load market data.")
-        st.stop()
+    # Show data status banner
+    _all_zero = df_live["price"].sum() == 0 if not df_live.empty else True
+    if _all_zero:
+        st.markdown("""
+        <div style="background:#1c1400;border:1px solid #92400e;border-radius:10px;
+             padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px">📡</span>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:#fbbf24">
+              Live data temporarily unavailable</div>
+            <div style="font-size:11px;color:#92400e;margin-top:2px">
+              The GSE API is unreachable from the cloud server right now.
+              Company list is shown from the database. Prices will load when the API recovers.
+              Click <b>Refresh data</b> to retry.</div>
+          </div>
+        </div>""", unsafe_allow_html=True)
 
     # ── Live ticker tape ───────────────────────────────────────────────────────
     ticker_items = []
@@ -2201,8 +2268,11 @@ if page == "Overview":
 
 elif page == "Stock Detail":
     if not symbols:
-        st.error("Could not load market data.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     st.markdown("""
     <style>
@@ -2428,8 +2498,7 @@ elif page == "Stock Detail":
             st.caption("No company profile data available yet.")
 
     if hist.empty:
-        st.info("No historical data available for this symbol.")
-        st.stop()
+        st.info("No historical data for this symbol yet — data builds daily when the app runs during market hours.")
 
     # ── Analytics + previous day comparison ──────────────────────────────────
     analytics = compute_stock_analytics(symbol)
@@ -2627,8 +2696,11 @@ elif page == "Sector Analysis":
     st.caption("Click any bubble to open full stock detail")
 
     if df_live.empty:
-        st.error("No market data.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     # Build sector groups
     df_s = df_live.copy()
@@ -2767,8 +2839,11 @@ elif page == "Compare Stocks":
     st.caption("Side-by-side normalised price performance")
 
     if not symbols:
-        st.error("Could not load market data.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     with st.sidebar:
         st.divider()
@@ -3105,8 +3180,11 @@ elif page == "Advanced Charts":
     </style>""", unsafe_allow_html=True)
 
     if not symbols:
-        st.error("No data available.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     # ── Controls in sidebar ───────────────────────────────────────────────────
     with st.sidebar:
@@ -3394,8 +3472,11 @@ elif page == "Market Review":
     </div>""", unsafe_allow_html=True)
 
     if df_live.empty:
-        st.error("No market data available.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     summary = market_summary(df_live)
     total_vol = summary.get("total_volume", 0)
@@ -3582,8 +3663,11 @@ elif page == "Heatmap":
     st.caption("Block size = trading volume · Colour intensity = % change")
 
     if df_live.empty:
-        st.error("No market data.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     df_hm = df_live.copy()
     df_hm["name"] = df_hm.apply(
@@ -3677,8 +3761,11 @@ elif page == "AI Signals":
     st.caption("Composite signals from RSI · MACD · Momentum · SMA — updated each session")
 
     if df_live.empty:
-        st.error("No market data.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     # Compute signals for all stocks with a spinner
     with st.spinner("Computing signals for all equities…"):
@@ -3822,8 +3909,11 @@ elif page == "Portfolio Simulator":
     st.caption("Simulate historical returns for any GSE stock")
 
     if not symbols:
-        st.error("No market data.")
-        st.stop()
+        st.markdown('''<div style="background:#1c1400;border:1px solid #92400e;
+    border-radius:10px;padding:12px 18px;margin-bottom:1rem">
+    <span style="color:#fbbf24;font-weight:600">📡 Live data temporarily unavailable</span><br>
+    <span style="color:#92400e;font-size:11px">GSE API unreachable from cloud. 
+    Click Refresh data to retry.</span></div>''', unsafe_allow_html=True)
 
     # ── Input form ─────────────────────────────────────────────────────────────
     with st.container():
