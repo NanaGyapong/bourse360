@@ -779,25 +779,66 @@ def get_live_prices() -> pd.DataFrame:
     except Exception as e:
         _DATA_SOURCE = f"CSV failed: {e}"
 
-    # ── Cloud fallback: build minimal df from _GSE_NAMES so app isn't blank ──
-    # Try local CSV/Excel before returning zeros
+    # ── Cloud fallback: load from gse_history CSV/Excel ─────────────────────
+    # Handles your exact CSV columns:
+    # date, ticker, year_high, year_low, prev_close, open, last_price,
+    # vwap, change, bid, offer, volume, value, percent_change, symbol, name, price, timestamp
     for _p in ["gse_history.csv", "gse_history.xlsx"]:
         try:
             _h = pd.read_excel(_p, engine="openpyxl") if _p.endswith(".xlsx") else pd.read_csv(_p)
             _h.columns = [c.lower().strip() for c in _h.columns]
+
+            # ── Find symbol column ────────────────────────────────────────────
+            _sym_col = next((c for c in ["symbol","ticker","name","stock"] if c in _h.columns), None)
+            if _sym_col is None:
+                continue
+            _h = _h.rename(columns={_sym_col: "symbol"})
+
+            # ── Find price column ─────────────────────────────────────────────
+            # Your CSV has both "price" and "last_price" — prefer "price"
+            _price_col = next((c for c in ["price","last_price","close","vwap"] if c in _h.columns), None)
+            if _price_col is None:
+                continue
+            if _price_col != "price":
+                _h = _h.rename(columns={_price_col: "price"})
+
+            # ── Find change column ────────────────────────────────────────────
+            # Your CSV has "percent_change" and "change" — prefer "percent_change"
+            if "percent_change" in _h.columns and "change" not in _h.columns:
+                _h = _h.rename(columns={"percent_change": "change"})
+            elif "percent_change" in _h.columns:
+                # Use percent_change as the authoritative change column
+                _h["change"] = pd.to_numeric(_h["percent_change"], errors="coerce").fillna(0)
+
+            # ── Get most recent date ──────────────────────────────────────────
             if "date" in _h.columns:
                 _h["date"] = pd.to_datetime(_h["date"], errors="coerce")
-                _h = _h[_h["date"] == _h["date"].max()]
-            _sc = "symbol" if "symbol" in _h.columns else "name"
-            _h  = _h.rename(columns={_sc: "symbol"})
-            for _c in ["change","volume"]:
-                if _c not in _h.columns: _h[_c] = 0
+                _h = _h.dropna(subset=["date"])
+                if not _h.empty:
+                    _h = _h[_h["date"] == _h["date"].max()].copy()
+
+            # ── Ensure volume column ──────────────────────────────────────────
+            if "volume" not in _h.columns:
+                _h["volume"] = 0
+
+            # ── Coerce types ──────────────────────────────────────────────────
             _h["price"]  = pd.to_numeric(_h["price"],  errors="coerce").fillna(0)
             _h["change"] = pd.to_numeric(_h["change"], errors="coerce").fillna(0)
+            _h["volume"] = pd.to_numeric(_h["volume"], errors="coerce").fillna(0).astype(int)
+
+            # ── Enrich with full company name ─────────────────────────────────
+            _h["name"] = _h["symbol"].map(
+                lambda s: _GSE_NAMES.get(str(s).upper().strip(), str(s))
+            )
+
+            # ── Return only if we have real price data ────────────────────────
             if not _h.empty and _h["price"].sum() > 0:
-                return _h[["symbol","price","change","volume"]].reset_index(drop=True)
-        except Exception:
+                return _h[["symbol","name","price","change","volume"]].reset_index(drop=True)
+
+        except Exception as _e:
             continue
+
+    # ── Final stub: company list with zero prices ─────────────────────────────
     return pd.DataFrame([
         {"symbol": s, "name": i.get("name", s), "price": 0.0, "change": 0.0, "volume": 0}
         for s, i in _GSE_COMPANIES.items()
@@ -1638,9 +1679,9 @@ if page == "Overview":
     </style>
     """, unsafe_allow_html=True)
 
-    # Show data status banner
-    _all_zero = df_live["price"].sum() == 0 if not df_live.empty else True
-    if _all_zero:
+    # Show data status banner only when prices are zero
+    _all_zero = (df_live["price"].sum() == 0) if not df_live.empty else True
+    if _all_zero and df_live.empty:
         st.markdown("""
         <div style="background:#1c1400;border:1px solid #92400e;border-radius:10px;
              padding:12px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px">
