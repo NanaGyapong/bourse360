@@ -1831,6 +1831,9 @@ if page == "Overview":
         </div>""", unsafe_allow_html=True)
 
     # ── ALL computation before render ────────────────────────────────────────────
+    # Time and status (needed for top-right display)
+    now_str      = datetime.now(timezone.utc).strftime("%d %b %Y · %H:%M GMT")
+
     # Market summary (needed for sentiment)
     _ov_sum      = market_summary(df_live)
     _ov_gainers  = _ov_sum.get("gainers",   0)
