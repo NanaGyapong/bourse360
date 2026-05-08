@@ -1203,6 +1203,31 @@ def market_analytics_summary(df: pd.DataFrame) -> dict:
     }
 
 
+def _compute_sentiment(df, gainers, losers, unchanged, avg_change, breadth):
+    """Bourse360 proprietary sentiment engine."""
+    score = 0.0
+    score += (breadth - 50) * 0.8
+    score += avg_change * 6
+    total_movers = gainers + losers
+    if total_movers > 0:
+        score += ((gainers - losers) / total_movers) * 10
+    try:
+        vol_up   = df[df["change"] > 0]["volume"].sum()
+        vol_down = df[df["change"] < 0]["volume"].sum()
+        vol_tot  = vol_up + vol_down
+        if vol_tot > 0:
+            score += ((vol_up - vol_down) / vol_tot) * 20
+    except Exception:
+        pass
+    if   score >= 25:  label, col = "Strongly Bullish", "#4ade80"
+    elif score >= 10:  label, col = "Bullish",          "#86efac"
+    elif score >= -10: label, col = "Neutral",          "#94a3b8"
+    elif score >= -25: label, col = "Bearish",          "#fca5a5"
+    else:              label, col = "Strongly Bearish", "#f87171"
+    confidence = min(int(abs(score) / 50 * 100 + 45), 95)
+    return label, confidence, score, col
+
+
 # ── Market summary ────────────────────────────────────────────────────────────
 
 def market_summary(df: pd.DataFrame) -> dict:
@@ -1943,44 +1968,8 @@ if page == "Overview":
     breadth_pct     = mkt_analytics.get("breadth_pct", 0)
     avg_chg         = mkt_analytics.get("avg_change", 0)
 
-    # ── Market Sentiment Engine ───────────────────────────────────────────────
-    def _compute_sentiment(df, gainers, losers, unchanged, avg_change, breadth):
-        """
-        Proprietary sentiment score based on:
-        breadth (40%) + avg_move (30%) + volume_bias (20%) + mover_ratio (10%)
-        Returns: (label, confidence, score, color)
-        """
-        score = 0.0
-        # Breadth (% advancing)
-        score += (breadth - 50) * 0.8          # +/-40 pts max
-        # Average market move
-        score += avg_change * 6                 # +/-30 pts at ±5%
-        # Mover ratio
-        total_movers = gainers + losers
-        if total_movers > 0:
-            ratio = (gainers - losers) / total_movers
-            score += ratio * 10                 # +/-10 pts
-        # Volume-weighted bias
-        try:
-            vol_up   = df[df["change"] > 0]["volume"].sum()
-            vol_down = df[df["change"] < 0]["volume"].sum()
-            vol_tot  = vol_up + vol_down
-            if vol_tot > 0:
-                score += ((vol_up - vol_down) / vol_tot) * 20  # +/-20 pts
-        except Exception:
-            pass
+    # _compute_sentiment defined at module level
 
-        # Map score to label + confidence
-        if   score >= 25:  label, col = "Strongly Bullish", "#4ade80"
-        elif score >= 10:  label, col = "Bullish",          "#86efac"
-        elif score >= -10: label, col = "Neutral",          "#94a3b8"
-        elif score >= -25: label, col = "Bearish",          "#fca5a5"
-        else:              label, col = "Strongly Bearish", "#f87171"
-
-        confidence = min(int(abs(score) / 50 * 100 + 45), 95)
-        return label, confidence, score, col
-
-    # (all computation done above render block — _sent_label, _ci_col etc. already set)
 
 
     # ── Header ─────────────────────────────────────────────────────────────────
