@@ -2013,13 +2013,15 @@ if page == "Overview":
                    font-family:monospace;width:58px;flex-shrink:0;text-align:right">
                 {_sarr} {_val_str}</div>
             </div>"""
-        st.markdown(f"""
-        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
-             padding:14px 18px;height:100%">
-          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
-               letter-spacing:.12em;margin-bottom:10px">Sector performance</div>
-          {_bars_html}
-        </div>""", unsafe_allow_html=True)
+        _sec_container = (
+            "<div style='background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;"
+            "padding:14px 18px;height:100%'>"
+            "<div style='font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;"
+            "letter-spacing:.12em;margin-bottom:10px'>Sector performance</div>"
+            + _bars_html +
+            "</div>"
+        )
+        st.markdown(_sec_container, unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom:.75rem'></div>", unsafe_allow_html=True)
 
@@ -2231,8 +2233,10 @@ if page == "Overview":
             <div style="font-size:13px;font-weight:700;color:{wc}">{"+" if wchg>=0 else ""}{wchg:.2f}%</div>
             <div style="font-size:10px;color:#475569;margin-top:1px">GH₵ {wpr:.2f}</div>
             </div>'''
-        st.markdown(f'''<div style="display:flex;gap:10px;overflow-x:auto;padding:4px 0 12px;
-            scrollbar-width:none;-ms-overflow-style:none">{wl_chips}</div>''', unsafe_allow_html=True)
+        st.markdown(
+            "<div style='display:flex;gap:10px;overflow-x:auto;padding:4px 0 12px;"
+            "scrollbar-width:none;-ms-overflow-style:none'>" + wl_chips + "</div>",
+            unsafe_allow_html=True)
 
     # ── TOP GAINERS grid (3-col like ISEDAN image 5) ───────────────────────────
     # ── Market breadth visual anchor ─────────────────────────────────────────
