@@ -813,15 +813,21 @@ def get_live_prices() -> pd.DataFrame:
                 _latest = _h_with_price["date"].max()
                 _h = _h_with_price[_h_with_price["date"] == _latest].copy()
 
-            # ── Change column — prefer percent_change ─────────────────────────
-            if "percent_change" in _h.columns:
-                _h["change"] = pd.to_numeric(_h["percent_change"],
-                                             errors="coerce").fillna(0)
-            elif "change" in _h.columns:
-                _h["change"] = pd.to_numeric(_h["change"],
-                                             errors="coerce").fillna(0)
+
+            # ── Change — calculate % from absolute price change ───────────────
+            _abs_chg = pd.to_numeric(
+                _h.get("change", pd.Series([0]*len(_h))), errors="coerce"
+            ).fillna(0)
+            _pct_chg = pd.to_numeric(
+                _h.get("percent_change", pd.Series([float("nan")]*len(_h))),
+                errors="coerce"
+            )
+            if _pct_chg.notna().sum() > 0:
+                _h["change"] = _pct_chg.fillna(0)
             else:
-                _h["change"] = 0.0
+                # percent_change all NaN — derive from absolute change
+                _prev_close = (_h["price"] - _abs_chg).replace(0, float("nan"))
+                _h["change"] = (_abs_chg / _prev_close * 100).fillna(0).round(2)
 
             # ── Volume ────────────────────────────────────────────────────────
             if "volume" not in _h.columns:
