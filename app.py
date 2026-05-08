@@ -1867,9 +1867,21 @@ if page == "Overview":
         df_live, _ov_gainers, _ov_losers, _ov_unchanged, _ov_avg_chg, _ov_breadth
     )
 
-    # ── Market Indices + Sentiment (very top of page) ───────────────────────────
-    # ── Render the index + sentiment + sector bars ────────────────────────────
-    ix_col, sent_col, sec_col = st.columns([2, 1.2, 2])
+    # ── Market Indices + Sentiment — very top of page ──────────────────────────
+    # Date + market status banner (top right)
+    _mkt_status_color = "#22c55e" if market_is_open() else "#475569"
+    _mkt_status_dot   = "●" if market_is_open() else "○"
+    _mkt_status_text  = "MARKET OPEN" if market_is_open() else "Market closed"
+    st.markdown(
+        f"<div style='display:flex;justify-content:flex-end;align-items:center;"
+        f"gap:12px;margin-bottom:8px'>"
+        f"<div style='font-size:12px;font-family:monospace;color:#475569'>{now_str}</div>"
+        f"<div style='font-size:12px;font-weight:700;color:{_mkt_status_color}'>"
+        f"{_mkt_status_dot} {_mkt_status_text}</div>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+    ix_col, sent_col = st.columns([2, 1.2])
 
     with ix_col:
         st.markdown(f"""
@@ -1972,17 +1984,7 @@ if page == "Overview":
 
 
 
-    # ── Header ─────────────────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div class="pro-header" style="align-items:center">
-      <div style="width:320px;max-width:55%">{_B360_LOGO_FULL}</div>
-      <div style="text-align:right">
-        <div class="pro-header-time">{now_str}</div>
-        <div style="font-size:11px;color:#334155;margin-top:4px">
-          {"<span style='color:#22c55e;font-weight:700'>● MARKET OPEN</span>" if market_is_open() else "<span style='color:#475569'>○ Market closed</span>"}
-          &nbsp;·&nbsp; BismarkDataLab Inc</div>
-      </div>
-    </div>""", unsafe_allow_html=True)
+    # (Main header removed — date/status shown in top-right of indices panel)
 
     # ── Global search bar (ISEDAN-style) ──────────────────────────────────────
     search_query = st.text_input("",
