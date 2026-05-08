@@ -1805,6 +1805,62 @@ if page == "Overview":
           </div>
         </div>""", unsafe_allow_html=True)
 
+    # ── Market Indices + Sentiment (very top of page) ───────────────────────────
+    # ── Render the index + sentiment + sector bars ────────────────────────────
+    ix_col, sent_col, sec_col = st.columns([2, 1.2, 2])
+
+    with ix_col:
+        st.markdown(f"""
+        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
+             padding:14px 18px;height:100%">
+          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
+               letter-spacing:.12em;margin-bottom:10px">Market indices</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;
+               margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1e2d3d">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#94a3b8">GSE Composite Index</div>
+              <div style="font-size:9px;color:#334155">GSE-CI · All equities</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:15px;font-weight:800;color:{_ci_col};font-family:monospace">
+                {_ci_arr} {"+" if _gse_ci_chg>=0 else ""}{_gse_ci_chg:.2f}%</div>
+              <div style="font-size:9px;color:#334155">avg daily return</div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#94a3b8">GSE Financial Index</div>
+              <div style="font-size:9px;color:#334155">GSE-FSI · Financials</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:15px;font-weight:800;color:{_fsi_col};font-family:monospace">
+                {_fsi_arr} {"+" if _gse_fsi_chg>=0 else ""}{_gse_fsi_chg:.2f}%</div>
+              <div style="font-size:9px;color:#334155">avg daily return</div>
+            </div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+    with sent_col:
+        _conf_bar_col = _sent_col
+        st.markdown(f"""
+        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
+             padding:14px 18px;height:100%;text-align:center">
+          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
+               letter-spacing:.12em;margin-bottom:8px">Market sentiment</div>
+          <div style="font-size:18px;font-weight:900;color:{_sent_col};line-height:1;
+               margin-bottom:6px">{_sent_label}</div>
+          <div style="font-size:11px;color:#475569;margin-bottom:8px">
+            Confidence: <b style="color:{_sent_col}">{_sent_conf}%</b></div>
+          <div style="background:#1e2d3d;border-radius:99px;height:6px;overflow:hidden">
+            <div style="width:{_sent_conf}%;height:6px;background:{_sent_col};
+                 border-radius:99px;transition:width .5s"></div>
+          </div>
+          <div style="font-size:9px;color:#334155;margin-top:8px;line-height:1.4">
+            Based on breadth · movers · avg move · volume bias</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom:.5rem'></div>", unsafe_allow_html=True)
+
     # ── Live ticker tape ───────────────────────────────────────────────────────
     ticker_items = []
     for _, r in df_live.iterrows():
@@ -1819,29 +1875,27 @@ if page == "Overview":
             f'<span style="color:#e2e8f0;font-family:monospace">GH₵ {prc:.2f}</span> '
             f'<span style="color:{clr};font-size:11px">{arrow} {chg:+.2f}%</span></span>'
         )
-    ticker_html = "".join(ticker_items * 3)  # repeat for seamless loop
-    st.markdown(f"""
-    <div style="background:#0b0f1c;border-top:1px solid #1e2d3d;border-bottom:1px solid #1e2d3d;
-         padding:0;margin-bottom:1.25rem;overflow:hidden;position:relative">
-      <div style="display:flex;align-items:center">
-        <div style="background:linear-gradient(135deg,#0ea5e9,#6366f1);
-             padding:6px 14px;font-size:10px;font-weight:900;color:#fff;
-             letter-spacing:.1em;white-space:nowrap;flex-shrink:0">LIVE</div>
-        <div style="flex:1;overflow:hidden;padding:7px 0">
-          <div style="display:inline-flex;animation:tickerscroll 50s linear infinite;
-               white-space:nowrap">
-            {ticker_html}
-          </div>
-        </div>
-      </div>
-    </div>
-    <style>
-    @keyframes tickerscroll {{
-      0%   {{ transform: translateX(0); }}
-      100% {{ transform: translateX(-33.33%); }}
-    }}
-    </style>
-    """, unsafe_allow_html=True)
+    ticker_html = "".join(ticker_items * 3)  # 3 copies for seamless CSS loop
+
+    # Build tape HTML using string concat — avoids f-string re-evaluation of {}
+    _tape_html = (
+        "<style>@keyframes tickerscroll{"
+        "0%{transform:translateX(0)}"
+        "100%{transform:translateX(-33.33%)}}"
+        ".ticker-inner{display:inline-flex;animation:tickerscroll 55s linear infinite;"
+        "white-space:nowrap}</style>"
+        "<div style='background:#0b0f1c;border-top:1px solid #1e2d3d;"
+        "border-bottom:1px solid #1e2d3d;padding:0;margin-bottom:1.25rem;"
+        "overflow:hidden;position:relative'>"
+        "<div style='display:flex;align-items:center'>"
+        "<div style='background:linear-gradient(135deg,#0ea5e9,#6366f1);"
+        "padding:6px 14px;font-size:10px;font-weight:900;color:#fff;"
+        "letter-spacing:.1em;white-space:nowrap;flex-shrink:0'>LIVE</div>"
+        "<div style='flex:1;overflow:hidden;padding:7px 0'>"
+        "<div class='ticker-inner'>" + ticker_html + "</div>"
+        "</div></div></div>"
+    )
+    st.markdown(_tape_html, unsafe_allow_html=True)
 
     summary         = market_summary(df_live)
     gainers_count   = summary.get("gainers",   0)
@@ -1915,115 +1969,6 @@ if page == "Overview":
         .sort_values("avg_chg", ascending=False)
     )
 
-    # ── Render the index + sentiment + sector bars ────────────────────────────
-    ix_col, sent_col, sec_col = st.columns([2, 1.2, 2])
-
-    with ix_col:
-        st.markdown(f"""
-        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
-             padding:14px 18px;height:100%">
-          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
-               letter-spacing:.12em;margin-bottom:10px">Market indices</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;
-               margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1e2d3d">
-            <div>
-              <div style="font-size:11px;font-weight:700;color:#94a3b8">GSE Composite Index</div>
-              <div style="font-size:9px;color:#334155">GSE-CI · All equities</div>
-            </div>
-            <div style="text-align:right">
-              <div style="font-size:15px;font-weight:800;color:{_ci_col};font-family:monospace">
-                {_ci_arr} {"+" if _gse_ci_chg>=0 else ""}{_gse_ci_chg:.2f}%</div>
-              <div style="font-size:9px;color:#334155">avg daily return</div>
-            </div>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div>
-              <div style="font-size:11px;font-weight:700;color:#94a3b8">GSE Financial Index</div>
-              <div style="font-size:9px;color:#334155">GSE-FSI · Financials</div>
-            </div>
-            <div style="text-align:right">
-              <div style="font-size:15px;font-weight:800;color:{_fsi_col};font-family:monospace">
-                {_fsi_arr} {"+" if _gse_fsi_chg>=0 else ""}{_gse_fsi_chg:.2f}%</div>
-              <div style="font-size:9px;color:#334155">avg daily return</div>
-            </div>
-          </div>
-        </div>""", unsafe_allow_html=True)
-
-    with sent_col:
-        _conf_bar_col = _sent_col
-        st.markdown(f"""
-        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
-             padding:14px 18px;height:100%;text-align:center">
-          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
-               letter-spacing:.12em;margin-bottom:8px">Market sentiment</div>
-          <div style="font-size:18px;font-weight:900;color:{_sent_col};line-height:1;
-               margin-bottom:6px">{_sent_label}</div>
-          <div style="font-size:11px;color:#475569;margin-bottom:8px">
-            Confidence: <b style="color:{_sent_col}">{_sent_conf}%</b></div>
-          <div style="background:#1e2d3d;border-radius:99px;height:6px;overflow:hidden">
-            <div style="width:{_sent_conf}%;height:6px;background:{_sent_col};
-                 border-radius:99px;transition:width .5s"></div>
-          </div>
-          <div style="font-size:9px;color:#334155;margin-top:8px;line-height:1.4">
-            Based on breadth · movers · avg move · volume bias</div>
-        </div>""", unsafe_allow_html=True)
-
-    with sec_col:
-        _bars_html = ""
-        # Sort: losers first (red), then gainers (green), skip zero movers
-        _sector_sorted = _sector_perf.sort_values("avg_chg", ascending=True)
-        # Scale bar width relative to max absolute move (not fixed 5%)
-        _max_abs = max(_sector_sorted["avg_chg"].abs().max(), 0.01)
-        for _, _sr in _sector_sorted.iterrows():
-            _sv   = float(_sr["avg_chg"])
-            # Skip truly zero sectors — show grey flat line instead
-            if abs(_sv) < 0.001:
-                _sc   = "#475569"
-                _sbg  = "rgba(71,85,105,0.1)"
-                _sw   = 2  # thin grey stub
-                _sarr = "●"
-                _val_str = "  0.00%"
-            elif _sv > 0:
-                _sc   = "#4ade80"
-                _sbg  = "rgba(34,197,94,0.12)"
-                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
-                _sarr = "▲"
-                _val_str = f"+{_sv:.2f}%"
-            else:
-                _sc   = "#f87171"
-                _sbg  = "rgba(239,68,68,0.12)"
-                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
-                _sarr = "▼"
-                _val_str = f"{_sv:.2f}%"
-
-            # Full sector name — abbreviate only if > 14 chars
-            _sname = _sr["sector"]
-            _sname_display = _sname if len(_sname) <= 14 else _sname[:12] + "…"
-
-            _bars_html += f"""
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-              <div style="font-size:10px;font-weight:600;color:#64748b;
-                   width:90px;text-align:right;flex-shrink:0;
-                   white-space:nowrap">{_sname_display}</div>
-              <div style="flex:1;background:#1e2d3d;border-radius:3px;height:5px;overflow:hidden">
-                <div style="width:{_sw}%;height:5px;background:{_sc};
-                     border-radius:3px;transition:width .4s"></div>
-              </div>
-              <div style="font-size:11px;font-weight:700;color:{_sc};
-                   font-family:monospace;width:58px;flex-shrink:0;text-align:right">
-                {_sarr} {_val_str}</div>
-            </div>"""
-        _sec_container = (
-            "<div style='background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;"
-            "padding:14px 18px;height:100%'>"
-            "<div style='font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;"
-            "letter-spacing:.12em;margin-bottom:10px'>Sector performance</div>"
-            + _bars_html +
-            "</div>"
-        )
-        st.markdown(_sec_container, unsafe_allow_html=True)
-
-    st.markdown("<div style='margin-bottom:.75rem'></div>", unsafe_allow_html=True)
 
     # ── Header ─────────────────────────────────────────────────────────────────
     st.markdown(f"""
@@ -2433,6 +2378,62 @@ if page == "Overview":
                 st.rerun()
     else:
         st.markdown('<div style="color:#334155;font-size:13px;padding:12px 0">No watchlist symbols in today&#39;s data. Add via the sidebar.</div>', unsafe_allow_html=True)
+
+    # ── Sector performance bars (after watchlist) ────────────────────────────
+    with sec_col:
+        _bars_html = ""
+        _sector_sorted = _sector_perf.sort_values("avg_chg", ascending=True)
+        _max_abs = max(_sector_sorted["avg_chg"].abs().max(), 0.01)
+        for _, _sr in _sector_sorted.iterrows():
+            _sv   = float(_sr["avg_chg"])
+            # Skip truly zero sectors — show grey flat line instead
+            if abs(_sv) < 0.001:
+                _sc   = "#475569"
+                _sbg  = "rgba(71,85,105,0.1)"
+                _sw   = 2  # thin grey stub
+                _sarr = "●"
+                _val_str = "  0.00%"
+            elif _sv > 0:
+                _sc   = "#4ade80"
+                _sbg  = "rgba(34,197,94,0.12)"
+                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
+                _sarr = "▲"
+                _val_str = f"+{_sv:.2f}%"
+            else:
+                _sc   = "#f87171"
+                _sbg  = "rgba(239,68,68,0.12)"
+                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
+                _sarr = "▼"
+                _val_str = f"{_sv:.2f}%"
+
+            # Full sector name — abbreviate only if > 14 chars
+            _sname = _sr["sector"]
+            _sname_display = _sname if len(_sname) <= 14 else _sname[:12] + "…"
+
+            _bars_html += (
+                f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:6px'>"
+                f"<div style='font-size:10px;font-weight:600;color:#64748b;width:90px;"
+                f"text-align:right;flex-shrink:0;white-space:nowrap'>{_sname_display}</div>"
+                f"<div style='flex:1;background:#1e2d3d;border-radius:3px;height:5px;overflow:hidden'>"
+                f"<div style='width:{_sw}%;height:5px;background:{_sc};"
+                f"border-radius:3px'></div></div>"
+                f"<div style='font-size:11px;font-weight:700;color:{_sc};"
+                f"font-family:monospace;width:58px;flex-shrink:0;text-align:right'>"
+                f"{_sarr} {_val_str}</div></div>"
+            )
+        _sec_container = (
+            "<div style='background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;"
+            "padding:14px 18px;height:100%'>"
+            "<div style='font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;"
+            "letter-spacing:.12em;margin-bottom:10px'>Sector performance</div>"
+            + _bars_html +
+            "</div>"
+        )
+        st.markdown(_sec_container, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom:.75rem'></div>", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom:.5rem'></div>", unsafe_allow_html=True)
 
     # ── All equities ───────────────────────────────────────────────────────────
     st.markdown('<div class="section-label">All equities</div>', unsafe_allow_html=True)
