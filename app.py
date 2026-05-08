@@ -1805,15 +1805,29 @@ if page == "Overview":
           </div>
         </div>""", unsafe_allow_html=True)
 
-    # ── Index + Sector computation (must be before render) ─────────────────────
-    _fin_syms = [s for s in df_live["symbol"] if SECTOR_MAP.get(s) == "Financials"]
-    _fin_df   = df_live[df_live["symbol"].isin(_fin_syms)]
-    _gse_ci_chg  = float(df_live["change"].mean()) if not df_live.empty else 0
-    _gse_fsi_chg = float(_fin_df["change"].mean()) if not _fin_df.empty else 0
-    _ci_col  = "#4ade80" if _gse_ci_chg >= 0 else "#f87171"
+    # ── ALL computation before render ────────────────────────────────────────────
+    # Market summary (needed for sentiment)
+    _ov_sum      = market_summary(df_live)
+    _ov_gainers  = _ov_sum.get("gainers",   0)
+    _ov_losers   = _ov_sum.get("losers",    0)
+    _ov_unchanged= _ov_sum.get("unchanged", 0)
+    _ov_mkt      = market_analytics_summary(df_live)
+    _ov_breadth  = _ov_mkt.get("breadth_pct", 0)
+    _ov_avg_chg  = _ov_mkt.get("avg_change",  0)
+
+    # Index computation — use only stocks with actual price movement
+    _fin_syms    = [s for s in df_live["symbol"] if SECTOR_MAP.get(s) == "Financials"]
+    _fin_df      = df_live[df_live["symbol"].isin(_fin_syms)]
+    _active      = df_live[df_live["change"] != 0]
+    _fin_active  = _fin_df[_fin_df["change"] != 0]
+    _gse_ci_chg  = float(_active["change"].mean())     if not _active.empty     else 0
+    _gse_fsi_chg = float(_fin_active["change"].mean()) if not _fin_active.empty else 0
+    _ci_col  = "#4ade80" if _gse_ci_chg  >= 0 else "#f87171"
     _fsi_col = "#4ade80" if _gse_fsi_chg >= 0 else "#f87171"
-    _ci_arr  = "▲" if _gse_ci_chg >= 0 else "▼"
+    _ci_arr  = "▲" if _gse_ci_chg  >= 0 else "▼"
     _fsi_arr = "▲" if _gse_fsi_chg >= 0 else "▼"
+
+    # Sector bars
     _df_sec = df_live.copy()
     _df_sec["sector"] = _df_sec["symbol"].map(SECTOR_MAP).fillna("Other")
     _sector_perf = (
@@ -1821,6 +1835,11 @@ if page == "Overview":
         .mean().reset_index()
         .rename(columns={"change":"avg_chg"})
         .sort_values("avg_chg", ascending=False)
+    )
+
+    # Sentiment engine — must be before render
+    _sent_label, _sent_conf, _sent_score, _sent_col = _compute_sentiment(
+        df_live, _ov_gainers, _ov_losers, _ov_unchanged, _ov_avg_chg, _ov_breadth
     )
 
     # ── Market Indices + Sentiment (very top of page) ───────────────────────────
@@ -1859,7 +1878,6 @@ if page == "Overview":
         </div>""", unsafe_allow_html=True)
 
     with sent_col:
-        _conf_bar_col = _sent_col
         st.markdown(f"""
         <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
              padding:14px 18px;height:100%;text-align:center">
@@ -1962,11 +1980,7 @@ if page == "Overview":
         confidence = min(int(abs(score) / 50 * 100 + 45), 95)
         return label, confidence, score, col
 
-    _sent_label, _sent_conf, _sent_score, _sent_col = _compute_sentiment(
-        df_live, gainers_count, losers_count, unchanged_count, avg_chg, breadth_pct
-    )
-
-    # (index computation moved above render block)
+    # (all computation done above render block — _sent_label, _ci_col etc. already set)
 
 
     # ── Header ─────────────────────────────────────────────────────────────────
