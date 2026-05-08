@@ -421,10 +421,39 @@ _GSE_COMPANIES = {
         "authorised":  "100,000,000",
         "sector":      "Consumer Goods",
     },
+    "ZEN": {
+        "name":        "Zen Petroleum Limited",
+        "listed":      "—",
+        "capital":     "GHS —",
+        "issued":      "—",
+        "authorised":  "—",
+        "sector":      "Oil & Gas",
+        "nature":      "Independent downstream petroleum marketing company operating fuel service stations and providing bulk fuel supply across Ghana.",
+    },
+    "SAMBA": {
+        "name":        "Kasapreko Company Limited",
+        "listed":      "—",
+        "capital":     "GHS —",
+        "issued":      "—",
+        "authorised":  "—",
+        "sector":      "Consumer Goods",
+        "nature":      "One of Ghana's largest beverage manufacturers, producing alcoholic and non-alcoholic drinks including Alomo Bitters, Kasapreko Schnapps, and a wide range of water and juice products.",
+    },
 }
 
 # Quick name lookup (backward compat with existing code)
 _GSE_NAMES = {k: v["name"] for k, v in _GSE_COMPANIES.items()}
+# Extra tickers from live feed not in company database
+_GSE_NAMES.update({
+    "ZEN":     "Zen Petroleum Limited",
+    "SAMBA":   "Kasapreko Company Limited",
+    "DIGICUT": "Digicut Ghana Limited",
+    "HORDS":   "Hords Limited",
+    "MMH":     "Meridian-Marshalls Holdings",
+    "IIL":     "Industrial Insurance Limited",
+    "GLD":     "Gold Fields Limited",
+    "AADS":    "Dannex Ayrton Starwin Plc",
+})
 
 
 # ── Company descriptions (for Stock Detail "About" section) ─────────────────
@@ -455,13 +484,18 @@ _GSE_ABOUT = {
     "CPC":    "Cocoa Processing Company (CPC) processes raw cocoa beans into semi-finished products including cocoa liquor, cocoa butter, and cocoa powder for export and domestic use.",
     "CLYD":   "Clydestone (Ghana) Limited provides information technology solutions and services to businesses and institutions in Ghana, including software development, systems integration, and ICT consulting.",
     "CMLT":   "Camelot Ghana Ltd is a printing and publishing company providing commercial printing, security printing, and office supplies to businesses and government institutions in Ghana.",
+    "ZEN":    "Zen Petroleum Limited is an independent downstream petroleum marketing company operating a growing network of fuel service stations across Ghana. The company provides bulk fuel supply, lubricants, and related petroleum products to industrial and retail customers.",
+    "SAMBA":  "Kasapreko Company Limited is one of Ghana's largest and most recognised beverage manufacturers. The company produces a wide portfolio of alcoholic and non-alcoholic beverages including the iconic Alomo Bitters, Kasapreko Schnapps, Kasapreko Water, and various juice products. With a strong distribution network across Ghana and export presence in West Africa, Kasapreko is a household brand in the FMCG space.",
 }
 # Auto-build sector map now that _GSE_COMPANIES is defined
 SECTOR_MAP = {k: v["sector"] for k, v in _GSE_COMPANIES.items()}
 SECTOR_MAP.update({
-    "AIRTELGH": "Telecoms", "TOR": "Oil & Gas",
-    "HFC": "Financials",    "GSR": "Mining",
-    "MOGL": "Mining",       "AYRTN": "Healthcare",
+    "AIRTELGH": "Telecoms",    "TOR":   "Oil & Gas",
+    "HFC":      "Financials",  "GSR":   "Mining",
+    "MOGL":     "Mining",      "AYRTN": "Healthcare",
+    "ZEN":      "Oil & Gas",   "SAMBA": "Consumer Goods",
+    "DIGICUT":  "Technology",  "HORDS": "Healthcare",
+    "MMH":      "Financials",  "IIL":   "Insurance",
 })
 
 # ── Logo & avatar helpers (module-level so all pages can use them) ──────────
@@ -1936,23 +1970,48 @@ if page == "Overview":
 
     with sec_col:
         _bars_html = ""
-        for _, _sr in _sector_perf.head(6).iterrows():
+        # Sort: losers first (red), then gainers (green), skip zero movers
+        _sector_sorted = _sector_perf.sort_values("avg_chg", ascending=True)
+        # Scale bar width relative to max absolute move (not fixed 5%)
+        _max_abs = max(_sector_sorted["avg_chg"].abs().max(), 0.01)
+        for _, _sr in _sector_sorted.iterrows():
             _sv   = float(_sr["avg_chg"])
-            _sc   = "#4ade80" if _sv >= 0 else "#f87171"
-            _sbg  = "rgba(34,197,94,0.12)" if _sv >= 0 else "rgba(239,68,68,0.12)"
-            _sw   = min(abs(_sv) / 5 * 100, 100)
-            _sarr = "▲" if _sv >= 0 else "▼"
+            # Skip truly zero sectors — show grey flat line instead
+            if abs(_sv) < 0.001:
+                _sc   = "#475569"
+                _sbg  = "rgba(71,85,105,0.1)"
+                _sw   = 2  # thin grey stub
+                _sarr = "●"
+                _val_str = "  0.00%"
+            elif _sv > 0:
+                _sc   = "#4ade80"
+                _sbg  = "rgba(34,197,94,0.12)"
+                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
+                _sarr = "▲"
+                _val_str = f"+{_sv:.2f}%"
+            else:
+                _sc   = "#f87171"
+                _sbg  = "rgba(239,68,68,0.12)"
+                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
+                _sarr = "▼"
+                _val_str = f"{_sv:.2f}%"
+
+            # Full sector name — abbreviate only if > 14 chars
+            _sname = _sr["sector"]
+            _sname_display = _sname if len(_sname) <= 14 else _sname[:12] + "…"
+
             _bars_html += f"""
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <div style="font-size:10px;font-weight:600;color:#64748b;
-                   width:82px;text-align:right;flex-shrink:0">{_sr['sector'][:10]}</div>
-              <div style="flex:1;background:#1e2d3d;border-radius:3px;height:6px;overflow:hidden">
-                <div style="width:{_sw:.0f}%;height:6px;background:{_sc};
-                     border-radius:3px"></div>
+                   width:90px;text-align:right;flex-shrink:0;
+                   white-space:nowrap">{_sname_display}</div>
+              <div style="flex:1;background:#1e2d3d;border-radius:3px;height:5px;overflow:hidden">
+                <div style="width:{_sw}%;height:5px;background:{_sc};
+                     border-radius:3px;transition:width .4s"></div>
               </div>
               <div style="font-size:11px;font-weight:700;color:{_sc};
-                   font-family:monospace;width:52px;flex-shrink:0">
-                {_sarr} {abs(_sv):.2f}%</div>
+                   font-family:monospace;width:58px;flex-shrink:0;text-align:right">
+                {_sarr} {_val_str}</div>
             </div>"""
         st.markdown(f"""
         <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
@@ -1979,7 +2038,8 @@ if page == "Overview":
     # ── Global search bar (ISEDAN-style) ──────────────────────────────────────
     search_query = st.text_input("",
         placeholder="🔍  Search symbol or company name…",
-        label_visibility="collapsed", key="global_search")
+        label_visibility="collapsed", key="global_search_top")
+    search_query = search_query or st.session_state.get("global_search_top","")
     if search_query and len(search_query) >= 2:
         q = search_query.upper()
         results = df_live[
@@ -2036,9 +2096,9 @@ if page == "Overview":
         <div class="kpi-sub">no movement today</div>
       </div>
       <div class="kpi-card kpi-purple">
-        <div class="kpi-lbl">Market breadth</div>
-        <div class="kpi-val" style="color:{breadth_col};font-size:22px">{breadth_pct:.0f}%</div>
-        <div class="kpi-sub">{breadth_lbl} · {vol_label}</div>
+        <div class="kpi-lbl">Total volume</div>
+        <div class="kpi-val" style="color:#a78bfa">{vol_label}</div>
+        <div class="kpi-sub">shares traded today</div>
       </div>
       <div class="kpi-card" style="border-top-color:#fbbf24 !important">
         <div class="kpi-lbl" style="color:#92400e">Avg move</div>
@@ -2160,12 +2220,16 @@ if page == "Overview":
             wbdr = "#4ade8033" if wchg>0 else "#f8717133" if wchg<0 else "#1e2d3d"
             wimghtml = f'<img src="{wlog}" style="width:32px;height:32px;object-fit:contain;border-radius:8px;background:#0d1117;padding:2px">' if wlog else f'<div style="width:32px;height:32px;border-radius:8px;background:#0c2a4a;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:#38bdf8">{wsym[:2]}</div>'
             wc = "#4ade80" if wchg>0 else "#f87171" if wchg<0 else "#475569"
+            _wname = _GSE_NAMES.get(wsym, wsym)
+            _wname_short = (_wname[:16] + "…") if len(_wname) > 16 else _wname
             wl_chips += f'''<div style="flex-shrink:0;background:{wbg};border:1px solid {wbdr};
-                border-radius:14px;padding:10px 16px;min-width:110px;cursor:pointer"
-                onclick="">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">{wimghtml}
-                  <span style="font-size:13px;font-weight:700;color:#f1f5f9">{wsym}</span></div>
-                <div style="font-size:12px;font-weight:600;color:{wc}">{"+" if wchg>=0 else ""}{wchg:.2f}%</div>
+            border-radius:14px;padding:10px 14px;min-width:120px;cursor:pointer"
+            onclick="">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">{wimghtml}
+            <div><div style="font-size:12px;font-weight:700;color:#f1f5f9">{wsym}</div>
+            <div style="font-size:9px;color:#475569;margin-top:1px">{_wname_short}</div></div></div>
+            <div style="font-size:13px;font-weight:700;color:{wc}">{"+" if wchg>=0 else ""}{wchg:.2f}%</div>
+            <div style="font-size:10px;color:#475569;margin-top:1px">GH₵ {wpr:.2f}</div>
             </div>'''
         st.markdown(f'''<div style="display:flex;gap:10px;overflow-x:auto;padding:4px 0 12px;
             scrollbar-width:none;-ms-overflow-style:none">{wl_chips}</div>''', unsafe_allow_html=True)
@@ -2214,7 +2278,8 @@ if page == "Overview":
         gcols = st.columns(3)
         for gi, (_, row) in enumerate(gainers_df.head(9).iterrows()):
             sym   = str(row["symbol"])
-            name  = _company(sym, str(row["name"]))
+            _rn  = str(row.get("name",""))
+            name = _GSE_NAMES.get(sym) or (_rn if _rn not in ["nan","",sym] else sym)
             price = float(row["price"])
             chg   = float(row["change"])
             prev  = price / (1 + chg/100) if chg != -100 else price
@@ -2271,7 +2336,8 @@ if page == "Overview":
         lcols = st.columns(3)
         for li, (_, row) in enumerate(losers_df.head(9).iterrows()):
             sym   = str(row["symbol"])
-            name  = _company(sym, str(row["name"]))
+            _rn  = str(row.get("name",""))
+            name = _GSE_NAMES.get(sym) or (_rn if _rn not in ["nan","",sym] else sym)
             price = float(row["price"])
             chg   = float(row["change"])
             prev  = price / (1 + chg/100) if chg != -100 else price
@@ -2334,7 +2400,8 @@ if page == "Overview":
     if not wl_df.empty:
         for _, row in wl_df.iterrows():
             sym   = str(row["symbol"])
-            name  = _company(sym, str(row["name"]))
+            _rn  = str(row.get("name",""))
+            name = _GSE_NAMES.get(sym) or (_rn if _rn not in ["nan","",sym] else sym)
             chg   = float(row["change"])
             pct   = min(max((chg + 10) / 20, 0), 1)
             bar_c = "#22c55e" if chg >= 0 else "#ef4444"
@@ -2396,7 +2463,8 @@ if page == "Overview":
             chg_str   = "+0.00%"
 
         sym      = str(r["symbol"])
-        cname    = _GSE_NAMES.get(sym, str(r["name"])) if str(r["name"]) == sym else str(r["name"])
+        _rname = str(r.get("name",""))
+        cname  = _GSE_NAMES.get(sym) or (_rname if _rname not in ["nan","",sym] else sym) if str(r["name"]) == sym else str(r["name"])
         price    = f"GH₵ {float(r['price']):.2f}"
         vol      = f"{int(r['volume']):,}"
 
