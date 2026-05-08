@@ -1440,31 +1440,95 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown('<div style="font-size:10px;font-weight:600;color:#475569;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">Navigation</div>', unsafe_allow_html=True)
+    # ── Grouped navigation CSS ───────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    .nav-group-label {
+        font-size:9px; font-weight:800; color:#334155;
+        text-transform:uppercase; letter-spacing:.14em;
+        padding:14px 0 6px 4px; display:block;
+        border-top:1px solid #1e2d3d; margin-top:4px;
+    }
+    .nav-group-label:first-child { border-top:none; padding-top:4px; }
+    /* Hide default radio label */
+    [data-testid="stRadio"] > label { display:none !important; }
+    </style>""", unsafe_allow_html=True)
+
+    # All pages in order — groups defined by labels injected between them
+    _all_pages = [
+        "Overview", "Stock Detail", "Sector Analysis",
+        "Market Review", "Heatmap",
+        "Compare Stocks", "Advanced Charts", "AI Signals",
+        "Portfolio", "Portfolio Simulator",
+    ]
+
+    # Group label injected before these pages
+    _group_labels = {
+        "Overview":        "Markets",
+        "Compare Stocks":  "Analytics",
+        "Portfolio":       "Portfolio",
+    }
+
+    # Render group labels + radio
+    for _pg in _all_pages:
+        if _pg in _group_labels:
+            st.markdown(
+                f'<span class="nav-group-label">{_group_labels[_pg]}</span>',
+                unsafe_allow_html=True
+            )
+
     page = st.radio(
         "Navigation",
-        ["Overview", "Stock Detail", "Sector Analysis", "Compare Stocks",
-         "Portfolio", "Advanced Charts", "Market Review",
-         "Heatmap", "AI Signals", "Portfolio Simulator"],
-        index=["Overview", "Stock Detail", "Sector Analysis", "Compare Stocks",
-               "Portfolio", "Advanced Charts", "Market Review",
-               "Heatmap", "AI Signals", "Portfolio Simulator"]
-              .index(st.session_state.page),
+        _all_pages,
+        index=_all_pages.index(st.session_state.page)
+              if st.session_state.page in _all_pages else 0,
         label_visibility="hidden",
         format_func=lambda x: {
             "Overview":            "🏠  Market overview",
             "Stock Detail":        "📈  Stock detail",
             "Sector Analysis":     "🏭  Sector analysis",
-            "Compare Stocks":      "⚖️  Compare stocks",
-            "Portfolio":           "💼  Portfolio tracker",
-            "Advanced Charts":     "📊  Advanced charts",
             "Market Review":       "📰  Daily market review",
             "Heatmap":             "🟩  Market heatmap",
+            "Compare Stocks":      "⚖️  Compare stocks",
+            "Advanced Charts":     "📊  Advanced charts",
             "AI Signals":          "🤖  AI signal panel",
+            "Portfolio":           "💼  Portfolio tracker",
             "Portfolio Simulator": "💰  Portfolio simulator",
         }.get(x, x),
     )
     st.session_state.page = page
+
+    # ── Render group section headers above radio ──────────────────────────────
+    # Streamlit radio doesn't support native section headers so we use
+    # CSS nth-child to inject visual separators between groups
+    st.markdown("""
+    <style>
+    /* Radio option list items */
+    [data-testid="stRadio"] > div > div { gap:0 !important; }
+
+    /* Group dividers — before Compare Stocks (6th item) and Portfolio (9th) */
+    [data-testid="stRadio"] > div > div > label:nth-child(6)::before {
+        content:"ANALYTICS";
+        display:block; font-size:9px; font-weight:800; color:#334155;
+        text-transform:uppercase; letter-spacing:.14em;
+        padding:12px 0 6px 14px;
+        border-top:1px solid #1e2d3d; margin-bottom:0;
+    }
+    [data-testid="stRadio"] > div > div > label:nth-child(9)::before {
+        content:"PORTFOLIO";
+        display:block; font-size:9px; font-weight:800; color:#334155;
+        text-transform:uppercase; letter-spacing:.14em;
+        padding:12px 0 6px 14px;
+        border-top:1px solid #1e2d3d; margin-bottom:0;
+    }
+    /* MARKETS label at very top */
+    [data-testid="stRadio"] > div > div > label:nth-child(1)::before {
+        content:"MARKETS";
+        display:block; font-size:9px; font-weight:800; color:#334155;
+        text-transform:uppercase; letter-spacing:.14em;
+        padding:4px 0 6px 14px; margin-bottom:0;
+    }
+    </style>""", unsafe_allow_html=True)
 
     st.divider()
 
@@ -1751,6 +1815,154 @@ if page == "Overview":
     unchanged_count = summary.get("unchanged", 0)
     vol_label       = summary.get("vol_label", "—")
     now_str         = datetime.now(timezone.utc).strftime("%d %b %Y · %H:%M GMT")
+    mkt_analytics   = market_analytics_summary(df_live)
+    breadth_pct     = mkt_analytics.get("breadth_pct", 0)
+    avg_chg         = mkt_analytics.get("avg_change", 0)
+
+    # ── Market Sentiment Engine ───────────────────────────────────────────────
+    def _compute_sentiment(df, gainers, losers, unchanged, avg_change, breadth):
+        """
+        Proprietary sentiment score based on:
+        breadth (40%) + avg_move (30%) + volume_bias (20%) + mover_ratio (10%)
+        Returns: (label, confidence, score, color)
+        """
+        score = 0.0
+        # Breadth (% advancing)
+        score += (breadth - 50) * 0.8          # +/-40 pts max
+        # Average market move
+        score += avg_change * 6                 # +/-30 pts at ±5%
+        # Mover ratio
+        total_movers = gainers + losers
+        if total_movers > 0:
+            ratio = (gainers - losers) / total_movers
+            score += ratio * 10                 # +/-10 pts
+        # Volume-weighted bias
+        try:
+            vol_up   = df[df["change"] > 0]["volume"].sum()
+            vol_down = df[df["change"] < 0]["volume"].sum()
+            vol_tot  = vol_up + vol_down
+            if vol_tot > 0:
+                score += ((vol_up - vol_down) / vol_tot) * 20  # +/-20 pts
+        except Exception:
+            pass
+
+        # Map score to label + confidence
+        if   score >= 25:  label, col = "Strongly Bullish", "#4ade80"
+        elif score >= 10:  label, col = "Bullish",          "#86efac"
+        elif score >= -10: label, col = "Neutral",          "#94a3b8"
+        elif score >= -25: label, col = "Bearish",          "#fca5a5"
+        else:              label, col = "Strongly Bearish", "#f87171"
+
+        confidence = min(int(abs(score) / 50 * 100 + 45), 95)
+        return label, confidence, score, col
+
+    _sent_label, _sent_conf, _sent_score, _sent_col = _compute_sentiment(
+        df_live, gainers_count, losers_count, unchanged_count, avg_chg, breadth_pct
+    )
+
+    # ── Market Index Panel ────────────────────────────────────────────────────
+    # Compute index values from sector-weighted averages
+    _fin_syms = [s for s in df_live["symbol"] if SECTOR_MAP.get(s) == "Financials"]
+    _fin_df   = df_live[df_live["symbol"].isin(_fin_syms)]
+    _gse_ci_chg  = float(df_live["change"].mean()) if not df_live.empty else 0
+    _gse_fsi_chg = float(_fin_df["change"].mean()) if not _fin_df.empty else 0
+    _ci_col  = "#4ade80" if _gse_ci_chg >= 0 else "#f87171"
+    _fsi_col = "#4ade80" if _gse_fsi_chg >= 0 else "#f87171"
+    _ci_arr  = "▲" if _gse_ci_chg >= 0 else "▼"
+    _fsi_arr = "▲" if _gse_fsi_chg >= 0 else "▼"
+
+    # ── Sector performance bars ───────────────────────────────────────────────
+    _df_sec = df_live.copy()
+    _df_sec["sector"] = _df_sec["symbol"].map(SECTOR_MAP).fillna("Other")
+    _sector_perf = (
+        _df_sec.groupby("sector")["change"]
+        .mean().reset_index()
+        .rename(columns={"change":"avg_chg"})
+        .sort_values("avg_chg", ascending=False)
+    )
+
+    # ── Render the index + sentiment + sector bars ────────────────────────────
+    ix_col, sent_col, sec_col = st.columns([2, 1.2, 2])
+
+    with ix_col:
+        st.markdown(f"""
+        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
+             padding:14px 18px;height:100%">
+          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
+               letter-spacing:.12em;margin-bottom:10px">Market indices</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;
+               margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1e2d3d">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#94a3b8">GSE Composite Index</div>
+              <div style="font-size:9px;color:#334155">GSE-CI · All equities</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:15px;font-weight:800;color:{_ci_col};font-family:monospace">
+                {_ci_arr} {"+" if _gse_ci_chg>=0 else ""}{_gse_ci_chg:.2f}%</div>
+              <div style="font-size:9px;color:#334155">avg daily return</div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#94a3b8">GSE Financial Index</div>
+              <div style="font-size:9px;color:#334155">GSE-FSI · Financials</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:15px;font-weight:800;color:{_fsi_col};font-family:monospace">
+                {_fsi_arr} {"+" if _gse_fsi_chg>=0 else ""}{_gse_fsi_chg:.2f}%</div>
+              <div style="font-size:9px;color:#334155">avg daily return</div>
+            </div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+    with sent_col:
+        _conf_bar_col = _sent_col
+        st.markdown(f"""
+        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
+             padding:14px 18px;height:100%;text-align:center">
+          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
+               letter-spacing:.12em;margin-bottom:8px">Market sentiment</div>
+          <div style="font-size:18px;font-weight:900;color:{_sent_col};line-height:1;
+               margin-bottom:6px">{_sent_label}</div>
+          <div style="font-size:11px;color:#475569;margin-bottom:8px">
+            Confidence: <b style="color:{_sent_col}">{_sent_conf}%</b></div>
+          <div style="background:#1e2d3d;border-radius:99px;height:6px;overflow:hidden">
+            <div style="width:{_sent_conf}%;height:6px;background:{_sent_col};
+                 border-radius:99px;transition:width .5s"></div>
+          </div>
+          <div style="font-size:9px;color:#334155;margin-top:8px;line-height:1.4">
+            Based on breadth · movers · avg move · volume bias</div>
+        </div>""", unsafe_allow_html=True)
+
+    with sec_col:
+        _bars_html = ""
+        for _, _sr in _sector_perf.head(6).iterrows():
+            _sv   = float(_sr["avg_chg"])
+            _sc   = "#4ade80" if _sv >= 0 else "#f87171"
+            _sbg  = "rgba(34,197,94,0.12)" if _sv >= 0 else "rgba(239,68,68,0.12)"
+            _sw   = min(abs(_sv) / 5 * 100, 100)
+            _sarr = "▲" if _sv >= 0 else "▼"
+            _bars_html += f"""
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+              <div style="font-size:10px;font-weight:600;color:#64748b;
+                   width:82px;text-align:right;flex-shrink:0">{_sr['sector'][:10]}</div>
+              <div style="flex:1;background:#1e2d3d;border-radius:3px;height:6px;overflow:hidden">
+                <div style="width:{_sw:.0f}%;height:6px;background:{_sc};
+                     border-radius:3px"></div>
+              </div>
+              <div style="font-size:11px;font-weight:700;color:{_sc};
+                   font-family:monospace;width:52px;flex-shrink:0">
+                {_sarr} {abs(_sv):.2f}%</div>
+            </div>"""
+        st.markdown(f"""
+        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
+             padding:14px 18px;height:100%">
+          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
+               letter-spacing:.12em;margin-bottom:10px">Sector performance</div>
+          {_bars_html}
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom:.75rem'></div>", unsafe_allow_html=True)
 
     # ── Header ─────────────────────────────────────────────────────────────────
     st.markdown(f"""
@@ -1839,8 +2051,71 @@ if page == "Overview":
     # (avatar/logo helpers moved to module level above)
 
 
-    def _sparkline(sym: str, width=80, height=28) -> str:
-        """Generate a tiny inline SVG sparkline from CSV history."""
+    def _sparkline(sym: str, width=100, height=36) -> str:
+        """Generate a clean SVG sparkline with area fill — used in stock cards."""
+        try:
+            hist = load_historical_comparison(sym)
+            if len(hist) < 2:
+                return ""
+            prices = hist["price"].tail(20).tolist()
+            if len(prices) < 2:
+                return ""
+            mn, mx = min(prices), max(prices)
+            rng = mx - mn
+            if rng == 0:
+                # Flat line
+                mid_y = height / 2
+                return (f'<svg width="{width}" height="{height}" style="display:block;overflow:visible">' +
+                        f'<line x1="0" y1="{mid_y}" x2="{width}" y2="{mid_y}" ' +
+                        f'stroke="#475569" stroke-width="1.5" stroke-dasharray="4,3"/></svg>')
+            pad = 2
+            xs = [pad + i * ((width - 2*pad) / (len(prices)-1)) for i in range(len(prices))]
+            ys = [pad + (height - 2*pad) - ((p - mn) / rng) * (height - 2*pad) for p in prices]
+            pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+            color = "#4ade80" if prices[-1] >= prices[0] else "#f87171"
+            fill_col = "rgba(34,197,94,0.12)" if color == "#4ade80" else "rgba(239,68,68,0.12)"
+            fill_pts = (f"{xs[0]:.1f},{height} " + pts +
+                        f" {xs[-1]:.1f},{height}")
+            # Endpoint dot
+            ex, ey = xs[-1], ys[-1]
+            return (f'<svg width="{width}" height="{height}" style="display:block;overflow:visible">' +
+                    f'<polygon points="{fill_pts}" fill="{fill_col}"/>' +
+                    f'<polyline points="{pts}" fill="none" stroke="{color}" ' +
+                    f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+                    f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="3" fill="{color}"/>' +
+                    f'</svg>')
+        except Exception:
+            return ""
+
+    def _sparkline_dummy(sym: str, width=100, height=36) -> str:
+        """Placeholder sparkline using today's change direction."""
+        try:
+            row = df_live[df_live["symbol"] == sym]
+            if row.empty: return ""
+            chg = float(row["change"].values[0])
+            color = "#4ade80" if chg >= 0 else "#f87171"
+            fill  = "rgba(34,197,94,0.1)" if chg >= 0 else "rgba(239,68,68,0.1)"
+            # Draw a simple directional line
+            if chg >= 0:
+                pts = f"0,{height-4} 20,{height*0.7:.0f} 50,{height*0.5:.0f} 80,{height*0.3:.0f} {width},{height*0.15:.0f}"
+            else:
+                pts = f"0,{height*0.15:.0f} 20,{height*0.3:.0f} 50,{height*0.5:.0f} 80,{height*0.7:.0f} {width},{height-4}"
+            fill_pts = f"0,{height} " + pts + f" {width},{height}"
+            return (f'<svg width="{width}" height="{height}" style="display:block;overflow:visible">' +
+                    f'<polygon points="{fill_pts}" fill="{fill}"/>' +
+                    f'<polyline points="{pts}" fill="none" stroke="{color}" ' +
+                    f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+                    f'</svg>')
+        except Exception:
+            return ""
+
+    def _get_sparkline(sym):
+        """Use CSV history if available, else directional dummy."""
+        sp = _sparkline(sym)
+        return sp if sp else _sparkline_dummy(sym)
+
+    def _LEGACY_sparkline(sym: str, width=80, height=28) -> str:
+        """[kept for compat] Generate a tiny inline SVG sparkline from CSV history."""
         try:
             hist = load_historical_comparison(sym)
             if len(hist) < 2:
@@ -1896,6 +2171,41 @@ if page == "Overview":
             scrollbar-width:none;-ms-overflow-style:none">{wl_chips}</div>''', unsafe_allow_html=True)
 
     # ── TOP GAINERS grid (3-col like ISEDAN image 5) ───────────────────────────
+    # ── Market breadth visual anchor ─────────────────────────────────────────
+    _total = gainers_count + losers_count + unchanged_count
+    if _total > 0:
+        _g_pct = gainers_count / _total * 100
+        _l_pct = losers_count  / _total * 100
+        _u_pct = unchanged_count / _total * 100
+        st.markdown(f"""
+        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
+             padding:14px 18px;margin-bottom:1rem">
+          <div style="display:flex;align-items:center;justify-content:space-between;
+               margin-bottom:10px">
+            <div style="font-size:10px;font-weight:800;color:#475569;text-transform:uppercase;
+                 letter-spacing:.1em">Market breadth</div>
+            <div style="font-size:11px;color:#475569">
+              <span style="color:#4ade80;font-weight:700">{gainers_count} advancing</span>
+              &nbsp;·&nbsp;
+              <span style="color:#f87171;font-weight:700">{losers_count} declining</span>
+              &nbsp;·&nbsp;
+              <span style="color:#475569">{unchanged_count} flat</span>
+            </div>
+          </div>
+          <div style="display:flex;border-radius:99px;overflow:hidden;height:10px;gap:2px">
+            <div style="width:{_g_pct:.1f}%;background:#22c55e;border-radius:99px 0 0 99px;
+                 transition:width .5s"></div>
+            <div style="width:{_u_pct:.1f}%;background:#1e2d3d"></div>
+            <div style="width:{_l_pct:.1f}%;background:#ef4444;border-radius:0 99px 99px 0;
+                 transition:width .5s"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px">
+            <div style="font-size:10px;color:#4ade80">{_g_pct:.0f}% advancing</div>
+            <div style="font-size:10px;color:#475569">{_u_pct:.0f}% flat</div>
+            <div style="font-size:10px;color:#f87171">{_l_pct:.0f}% declining</div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
     st.markdown('<div class="section-label">Top gainers (1D)</div>', unsafe_allow_html=True)
 
     if gainers_df.empty:
