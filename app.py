@@ -1805,6 +1805,24 @@ if page == "Overview":
           </div>
         </div>""", unsafe_allow_html=True)
 
+    # ── Index + Sector computation (must be before render) ─────────────────────
+    _fin_syms = [s for s in df_live["symbol"] if SECTOR_MAP.get(s) == "Financials"]
+    _fin_df   = df_live[df_live["symbol"].isin(_fin_syms)]
+    _gse_ci_chg  = float(df_live["change"].mean()) if not df_live.empty else 0
+    _gse_fsi_chg = float(_fin_df["change"].mean()) if not _fin_df.empty else 0
+    _ci_col  = "#4ade80" if _gse_ci_chg >= 0 else "#f87171"
+    _fsi_col = "#4ade80" if _gse_fsi_chg >= 0 else "#f87171"
+    _ci_arr  = "▲" if _gse_ci_chg >= 0 else "▼"
+    _fsi_arr = "▲" if _gse_fsi_chg >= 0 else "▼"
+    _df_sec = df_live.copy()
+    _df_sec["sector"] = _df_sec["symbol"].map(SECTOR_MAP).fillna("Other")
+    _sector_perf = (
+        _df_sec.groupby("sector")["change"]
+        .mean().reset_index()
+        .rename(columns={"change":"avg_chg"})
+        .sort_values("avg_chg", ascending=False)
+    )
+
     # ── Market Indices + Sentiment (very top of page) ───────────────────────────
     # ── Render the index + sentiment + sector bars ────────────────────────────
     ix_col, sent_col, sec_col = st.columns([2, 1.2, 2])
@@ -1948,26 +1966,7 @@ if page == "Overview":
         df_live, gainers_count, losers_count, unchanged_count, avg_chg, breadth_pct
     )
 
-    # ── Market Index Panel ────────────────────────────────────────────────────
-    # Compute index values from sector-weighted averages
-    _fin_syms = [s for s in df_live["symbol"] if SECTOR_MAP.get(s) == "Financials"]
-    _fin_df   = df_live[df_live["symbol"].isin(_fin_syms)]
-    _gse_ci_chg  = float(df_live["change"].mean()) if not df_live.empty else 0
-    _gse_fsi_chg = float(_fin_df["change"].mean()) if not _fin_df.empty else 0
-    _ci_col  = "#4ade80" if _gse_ci_chg >= 0 else "#f87171"
-    _fsi_col = "#4ade80" if _gse_fsi_chg >= 0 else "#f87171"
-    _ci_arr  = "▲" if _gse_ci_chg >= 0 else "▼"
-    _fsi_arr = "▲" if _gse_fsi_chg >= 0 else "▼"
-
-    # ── Sector performance bars ───────────────────────────────────────────────
-    _df_sec = df_live.copy()
-    _df_sec["sector"] = _df_sec["symbol"].map(SECTOR_MAP).fillna("Other")
-    _sector_perf = (
-        _df_sec.groupby("sector")["change"]
-        .mean().reset_index()
-        .rename(columns={"change":"avg_chg"})
-        .sort_values("avg_chg", ascending=False)
-    )
+    # (index computation moved above render block)
 
 
     # ── Header ─────────────────────────────────────────────────────────────────
