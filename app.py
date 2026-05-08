@@ -2386,58 +2386,6 @@ if page == "Overview":
     else:
         st.markdown('<div style="color:#334155;font-size:13px;padding:12px 0">No watchlist symbols in today&#39;s data. Add via the sidebar.</div>', unsafe_allow_html=True)
 
-    # ── Sector performance bars (after watchlist) ────────────────────────────
-    with sec_col:
-        _bars_html = ""
-        _sector_sorted = _sector_perf.sort_values("avg_chg", ascending=True)
-        _max_abs = max(_sector_sorted["avg_chg"].abs().max(), 0.01)
-        for _, _sr in _sector_sorted.iterrows():
-            _sv   = float(_sr["avg_chg"])
-            # Skip truly zero sectors — show grey flat line instead
-            if abs(_sv) < 0.001:
-                _sc   = "#475569"
-                _sbg  = "rgba(71,85,105,0.1)"
-                _sw   = 2  # thin grey stub
-                _sarr = "●"
-                _val_str = "  0.00%"
-            elif _sv > 0:
-                _sc   = "#4ade80"
-                _sbg  = "rgba(34,197,94,0.12)"
-                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
-                _sarr = "▲"
-                _val_str = f"+{_sv:.2f}%"
-            else:
-                _sc   = "#f87171"
-                _sbg  = "rgba(239,68,68,0.12)"
-                _sw   = max(int(abs(_sv) / _max_abs * 100), 4)
-                _sarr = "▼"
-                _val_str = f"{_sv:.2f}%"
-
-            # Full sector name — abbreviate only if > 14 chars
-            _sname = _sr["sector"]
-            _sname_display = _sname if len(_sname) <= 14 else _sname[:12] + "…"
-
-            _bars_html += (
-                f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:6px'>"
-                f"<div style='font-size:10px;font-weight:600;color:#64748b;width:90px;"
-                f"text-align:right;flex-shrink:0;white-space:nowrap'>{_sname_display}</div>"
-                f"<div style='flex:1;background:#1e2d3d;border-radius:3px;height:5px;overflow:hidden'>"
-                f"<div style='width:{_sw}%;height:5px;background:{_sc};"
-                f"border-radius:3px'></div></div>"
-                f"<div style='font-size:11px;font-weight:700;color:{_sc};"
-                f"font-family:monospace;width:58px;flex-shrink:0;text-align:right'>"
-                f"{_sarr} {_val_str}</div></div>"
-            )
-        _sec_container = (
-            "<div style='background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;"
-            "padding:14px 18px;height:100%'>"
-            "<div style='font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;"
-            "letter-spacing:.12em;margin-bottom:10px'>Sector performance</div>"
-            + _bars_html +
-            "</div>"
-        )
-        st.markdown(_sec_container, unsafe_allow_html=True)
-
     st.markdown("<div style='margin-bottom:.75rem'></div>", unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom:.5rem'></div>", unsafe_allow_html=True)
