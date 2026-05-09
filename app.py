@@ -835,12 +835,19 @@ def get_live_prices() -> pd.DataFrame:
             _h = _h[_h["symbol"].astype(str).str.strip() != ""]
             _h = _h[_h["symbol"].astype(str).str.strip() != "nan"]
 
-            # ── Parse dates — handle BOTH formats ────────────────────────────
+            # ── Smart date parser — handles ISO (2026-05-08) AND DD-MM-YY (08-05-26)
             if "date" in _h.columns:
-                _h["date"] = pd.to_datetime(_h["date"], dayfirst=True,
-                                            errors="coerce")
+                def _smart_d(d):
+                    s = str(d).strip()
+                    if not s or s == "nan":
+                        return pd.NaT
+                    # ISO: starts with 4-digit year
+                    if len(s) >= 10 and len(s) > 4 and s[4] in ("-","/") and s[:4].isdigit():
+                        return pd.to_datetime(s, errors="coerce")
+                    # DD-MM-YY or DD/MM/YYYY
+                    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+                _h["date"] = _h["date"].apply(_smart_d)
                 _h = _h.dropna(subset=["date"])
-                # Get most recent date that has real price data
                 _h_with_price = _h[_h["price"] > 0]
                 if _h_with_price.empty:
                     continue
@@ -895,12 +902,19 @@ def get_live_prices() -> pd.DataFrame:
 def save_daily_snapshot(df: pd.DataFrame, filepath: str = "gse_history.csv") -> bool:
     """
     Appends today's live prices to gse_history.csv.
-    Deduplicates by date+symbol so re-runs don't create duplicate rows.
-    Also reads existing gse_history.xlsx if CSV doesn't exist yet.
-    Returns True if new rows were saved.
+    - Skips if df is empty or all prices are zero (cloud fallback / stub data)
+    - Deduplicates by date+symbol so re-runs don't create duplicate rows
+    - Returns True if new rows were saved.
     """
     if df.empty:
         return False
+    # Don't save stub/fallback data with all zero prices — would corrupt history
+    try:
+        if "price" in df.columns and pd.to_numeric(df["price"], errors="coerce").fillna(0).sum() == 0:
+            return False
+    except Exception:
+        return False
+
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         snap  = df.copy()
@@ -909,7 +923,6 @@ def save_daily_snapshot(df: pd.DataFrame, filepath: str = "gse_history.csv") -> 
 
         if os.path.exists(filepath):
             existing = pd.read_csv(filepath)
-            # Drop today's rows for this symbol set (so we overwrite with latest)
             if "date" in existing.columns and "symbol" in existing.columns:
                 existing = existing[existing["date"] != today]
             combined = pd.concat([existing, snap], ignore_index=True)
@@ -918,7 +931,7 @@ def save_daily_snapshot(df: pd.DataFrame, filepath: str = "gse_history.csv") -> 
 
         combined.to_csv(filepath, index=False)
         return True
-    except Exception as e:
+    except Exception:
         return False
 
 
@@ -933,7 +946,13 @@ def load_historical_comparison(symbol: str, filepath: str = "gse_history.csv") -
         if "symbol" not in df.columns and "name" in df.columns:
             df = df.rename(columns={"name": "symbol"})
         df = df[df["symbol"].astype(str).str.upper() == symbol.upper()].copy()
-        df["date"]  = pd.to_datetime(df["date"], errors="coerce")
+        def _hd(d):
+            s = str(d).strip()
+            if not s or s == "nan": return pd.NaT
+            if len(s) >= 10 and len(s) > 4 and s[4] in ("-","/") and s[:4].isdigit():
+                return pd.to_datetime(s, errors="coerce")
+            return pd.to_datetime(s, dayfirst=True, errors="coerce")
+        df["date"] = df["date"].apply(_hd)
         df["price"] = pd.to_numeric(df["price"], errors="coerce")
         return df.dropna(subset=["date","price"]).sort_values("date").reset_index(drop=True)
     except Exception:
@@ -1253,6 +1272,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+st.markdown(
+    '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">',
+    unsafe_allow_html=True
+)
 # Inject dark background before any component renders
 st.markdown("""
 <style>
@@ -1344,6 +1367,32 @@ if not df_live.empty:
     df_live = _normalise_change(df_live)
     # Auto-save today's snapshot to CSV for historical comparison
     save_daily_snapshot(df_live)
+    # Also persist today's sentiment score for weekly trend
+    try:
+        import os
+        _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _sent_csv = "sentiment_history.csv"
+        _ov_s = market_summary(df_live)
+        _ov_m = market_analytics_summary(df_live)
+        _sl, _sc, _ss, _ = _compute_sentiment(
+            df_live,
+            _ov_s.get("gainers",0), _ov_s.get("losers",0),
+            _ov_s.get("unchanged",0), _ov_m.get("avg_change",0),
+            _ov_m.get("breadth_pct",0)
+        )
+        _new_row = pd.DataFrame([{
+            "date": _today, "label": _sl,
+            "score": round(_ss, 2), "confidence": _sc
+        }])
+        if os.path.exists(_sent_csv):
+            _sh = pd.read_csv(_sent_csv)
+            _sh = _sh[_sh["date"] != _today]
+            _sh = pd.concat([_sh, _new_row], ignore_index=True).tail(30)
+        else:
+            _sh = _new_row
+        _sh.to_csv(_sent_csv, index=False)
+    except Exception:
+        pass
 else:
     # ── Hard fallback: build stub df from company database ─────────────────
     # This ensures the app ALWAYS renders even when all APIs are unreachable
@@ -1474,6 +1523,111 @@ with st.sidebar:
     div[data-testid="stRadio"] label > div:first-child { display:none !important; }
     /* Hide "nav" label text specifically */
     div[data-testid="stRadio"] > label[data-testid="stWidgetLabel"] { display:none !important; }
+
+    /* ══════════════════════════════════════════════════════════════════
+       MOBILE RESPONSIVE — Bourse360
+       Targets phones (≤768px) and small tablets (≤1024px)
+    ══════════════════════════════════════════════════════════════════ */
+
+    /* Base: tighter padding on mobile */
+    @media (max-width: 768px) {
+        .main .block-container {
+            padding: 0.5rem 0.75rem 2rem !important;
+            max-width: 100% !important;
+        }
+
+        /* KPI cards — 2 per row on mobile */
+        .kpi-grid {
+            grid-template-columns: repeat(2, 1fr) !important;
+            gap: 8px !important;
+        }
+
+        /* KPI card text sizes */
+        .kpi-val  { font-size: 22px !important; }
+        .kpi-lbl  { font-size: 9px  !important; }
+        .kpi-sub  { font-size: 10px !important; }
+
+        /* Stock cards — 1 per row on mobile */
+        .gainer-grid, .loser-grid, .all-stocks-grid {
+            grid-template-columns: 1fr !important;
+        }
+
+        /* Pro header — stack vertically */
+        .pro-header {
+            flex-direction: column !important;
+            gap: 8px !important;
+            padding: 12px !important;
+        }
+        .pro-header > div { width: 100% !important; }
+
+        /* Bourse360 logo — smaller on mobile */
+        .pro-header svg { width: 180px !important; }
+
+        /* Sentiment + indices — stack on mobile */
+        [data-testid="stColumns"] > div {
+            min-width: 100% !important;
+        }
+
+        /* Ticker tape — smaller font */
+        .ticker-item { font-size: 11px !important; padding: 0 12px !important; }
+
+        /* Tables — horizontal scroll */
+        [data-testid="stDataFrame"] {
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+
+        /* Heatmap cells — 2 per row */
+        .hm-cell { min-width: 45% !important; }
+
+        /* Sidebar auto-collapse hint */
+        [data-testid="stSidebar"] {
+            min-width: 240px !important;
+            max-width: 280px !important;
+        }
+
+        /* Section labels */
+        .section-label { font-size: 9px !important; padding: 8px 0 6px !important; }
+
+        /* Charts — full width */
+        .js-plotly-plot { width: 100% !important; }
+
+        /* Alert cards */
+        .alert-card { padding: 10px 12px !important; }
+    }
+
+    /* Small tablet — 3 KPI cards per row */
+    @media (min-width: 769px) and (max-width: 1024px) {
+        .kpi-grid {
+            grid-template-columns: repeat(3, 1fr) !important;
+        }
+        .main .block-container {
+            padding: 1rem !important;
+        }
+    }
+
+    /* Touch-friendly tap targets */
+    @media (hover: none) and (pointer: coarse) {
+        [data-testid="stRadio"] label {
+            padding: 12px 14px !important;
+            min-height: 44px !important;
+        }
+        button { min-height: 44px !important; }
+        .hm-cell { min-height: 64px !important; cursor: pointer !important; }
+    }
+
+    /* Prevent horizontal overflow */
+    * { box-sizing: border-box !important; }
+    body { overflow-x: hidden !important; }
+
+    /* Mobile-friendly stock cards */
+    @media (max-width: 768px) {
+        .stock-card {
+            padding: 12px !important;
+        }
+        .stock-card .ticker { font-size: 15px !important; }
+        .stock-card .price  { font-size: 18px !important; }
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -1884,6 +2038,7 @@ if page == "Overview":
         f"</div>",
         unsafe_allow_html=True
     )
+    # On mobile these cols stack automatically via Streamlit's responsive layout
     ix_col, sent_col = st.columns([2, 1.2])
 
     with ix_col:
@@ -1918,22 +2073,51 @@ if page == "Overview":
         </div>""", unsafe_allow_html=True)
 
     with sent_col:
-        st.markdown(f"""
-        <div style="background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;
-             padding:14px 18px;height:100%;text-align:center">
-          <div style="font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;
-               letter-spacing:.12em;margin-bottom:8px">Market sentiment</div>
-          <div style="font-size:18px;font-weight:900;color:{_sent_col};line-height:1;
-               margin-bottom:6px">{_sent_label}</div>
-          <div style="font-size:11px;color:#475569;margin-bottom:8px">
-            Confidence: <b style="color:{_sent_col}">{_sent_conf}%</b></div>
-          <div style="background:#1e2d3d;border-radius:99px;height:6px;overflow:hidden">
-            <div style="width:{_sent_conf}%;height:6px;background:{_sent_col};
-                 border-radius:99px;transition:width .5s"></div>
-          </div>
-          <div style="font-size:9px;color:#334155;margin-top:8px;line-height:1.4">
-            Based on breadth · movers · avg move · volume bias</div>
-        </div>""", unsafe_allow_html=True)
+        # Load sentiment history for weekly trend sparkline
+        _sent_hist_svg = ""
+        try:
+            import os
+            if os.path.exists("sentiment_history.csv"):
+                _sh = pd.read_csv("sentiment_history.csv").tail(7)
+                if len(_sh) >= 2:
+                    _scores = _sh["score"].tolist()
+                    _mn, _mx = min(_scores), max(_scores)
+                    _rng = _mx - _mn if _mx != _mn else 1
+                    _sw, _sh2 = 120, 28
+                    _xs = [i * (_sw/(len(_scores)-1)) for i in range(len(_scores))]
+                    _ys = [_sh2 - ((_s-_mn)/_rng)*_sh2 for _s in _scores]
+                    _pts = " ".join(f"{x:.1f},{y:.1f}" for x,y in zip(_xs,_ys))
+                    _lc = "#4ade80" if _scores[-1] >= _scores[0] else "#f87171"
+                    _sent_hist_svg = (
+                        f"<svg width='{_sw}' height='{_sh2}' style='display:block;margin:6px auto 0'>"
+                        f"<polyline points='{_pts}' fill='none' stroke='{_lc}' "
+                        f"stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>"
+                        f"<circle cx='{_xs[-1]:.1f}' cy='{_ys[-1]:.1f}' r='3' fill='{_lc}'/>"
+                        f"</svg>"
+                        f"<div style='font-size:9px;color:#334155;text-align:center;margin-top:2px'>"
+                        f"7-day trend</div>"
+                    )
+        except Exception:
+            pass
+
+        _sent_block = (
+            "<div style='background:#0d1117;border:1px solid #1e2d3d;border-radius:12px;"
+            "padding:14px 18px;height:100%;text-align:center'>"
+            "<div style='font-size:9px;font-weight:800;color:#334155;text-transform:uppercase;"
+            "letter-spacing:.12em;margin-bottom:8px'>Market sentiment</div>"
+            f"<div style='font-size:18px;font-weight:900;color:{_sent_col};line-height:1;"
+            f"margin-bottom:6px'>{_sent_label}</div>"
+            f"<div style='font-size:11px;color:#475569;margin-bottom:8px'>"
+            f"Confidence: <b style='color:{_sent_col}'>{_sent_conf}%</b></div>"
+            f"<div style='background:#1e2d3d;border-radius:99px;height:6px;overflow:hidden'>"
+            f"<div style='width:{_sent_conf}%;height:6px;background:{_sent_col};"
+            "border-radius:99px'></div></div>"
+            + _sent_hist_svg +
+            "<div style='font-size:9px;color:#334155;margin-top:6px;line-height:1.4'>"
+            "Breadth · movers · avg move · volume</div>"
+            "</div>"
+        )
+        st.markdown(_sent_block, unsafe_allow_html=True)
 
     st.markdown("<div style='margin-bottom:.5rem'></div>", unsafe_allow_html=True)
 
@@ -2836,6 +3020,54 @@ elif page == "Stock Detail":
             <div class="co-val">{co_dps}</div></div>
         </div>
         """, unsafe_allow_html=True)
+
+    # ── Stock-specific news ──────────────────────────────────────────────────
+    st.markdown('<div class="section-label">News &amp; mentions</div>', unsafe_allow_html=True)
+    try:
+        import xml.etree.ElementTree as _ET, re as _nre
+        _co_name_news = _GSE_NAMES.get(symbol, symbol)
+        _kw = [symbol, _co_name_news.split()[0]]
+        _stock_articles = []
+        _nfeeds = [
+            ("Ghana Business", "https://www.ghanaweb.com/GhanaHomePage/rss/business.xml"),
+            ("Reuters",        "https://feeds.reuters.com/reuters/businessNews"),
+            ("BBC Business",   "https://feeds.bbci.co.uk/news/business/rss.xml"),
+        ]
+        for _nsrc, _nurl in _nfeeds:
+            try:
+                _nr = requests.get(_nurl, headers=HEADERS, timeout=6)
+                _nroot = _ET.fromstring(_nr.content)
+                for _nitem in _nroot.iter("item"):
+                    _nt = _nitem.findtext("title","").strip()
+                    _nl = _nitem.findtext("link","").strip()
+                    _nd = _nre.sub(r"<[^>]+>","",_nitem.findtext("description",""))[:140]
+                    _np = _nitem.findtext("pubDate","")[:16]
+                    if any(k.upper() in _nt.upper() or k.upper() in _nd.upper() for k in _kw):
+                        _stock_articles.append({"source":_nsrc,"title":_nt,
+                                                "link":_nl,"desc":_nd,"pub":_np})
+            except Exception:
+                continue
+
+        if _stock_articles:
+            for _na in _stock_articles[:4]:
+                _nc = "#38bdf8" if "Ghana" in _na["source"] else "#6366f1"
+                st.markdown(
+                    "<div style='background:#0d1117;border:1px solid #1e2d3d;"
+                    "border-radius:10px;padding:12px 16px;margin-bottom:8px'>"
+                    "<div style='display:flex;justify-content:space-between;"
+                    "align-items:center;margin-bottom:4px'>"
+                    f"<span style='font-size:10px;font-weight:700;color:{_nc}'>{_na['source']}</span>"
+                    f"<span style='font-size:10px;color:#334155'>{_na['pub']}</span></div>"
+                    f"<div style='font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:4px'>"
+                    f"<a href='{_na['link']}' target='_blank' style='color:#e2e8f0;"
+                    f"text-decoration:none'>{_na['title']}</a></div>"
+                    f"<div style='font-size:11px;color:#475569'>{_na['desc']}</div></div>",
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info(f"No recent news found mentioning {symbol}. Check the Finance news section for market headlines.")
+    except Exception:
+        st.caption("News feed temporarily unavailable.")
 
     # ── About the company (like ISEDAN image 4) ────────────────────────────
     about_text = _GSE_ABOUT.get(symbol, "")
