@@ -855,20 +855,31 @@ def get_live_prices() -> pd.DataFrame:
                 _h = _h_with_price[_h_with_price["date"] == _latest].copy()
 
 
-            # ── Change — calculate % from absolute price change ───────────────
+            # ── Change — robustly compute percent change ──────────────────────
+            # Always recompute from absolute change to avoid corrupted percent values
             _abs_chg = pd.to_numeric(
                 _h.get("change", pd.Series([0]*len(_h))), errors="coerce"
             ).fillna(0)
-            _pct_chg = pd.to_numeric(
+            _pct_chg_existing = pd.to_numeric(
                 _h.get("percent_change", pd.Series([float("nan")]*len(_h))),
                 errors="coerce"
             )
-            if _pct_chg.notna().sum() > 0:
-                _h["change"] = _pct_chg.fillna(0)
+
+            # Calculate percent from absolute change & prev_close (or price - change)
+            if "prev_close" in _h.columns:
+                _prev = pd.to_numeric(_h["prev_close"], errors="coerce").fillna(0)
+                _prev = _prev.where(_prev > 0, _h["price"] - _abs_chg)
             else:
-                # percent_change all NaN — derive from absolute change
-                _prev_close = (_h["price"] - _abs_chg).replace(0, float("nan"))
-                _h["change"] = (_abs_chg / _prev_close * 100).fillna(0).round(2)
+                _prev = (_h["price"] - _abs_chg)
+            _prev = _prev.replace(0, float("nan"))
+            _calc_pct = (_abs_chg / _prev * 100).fillna(0).round(2)
+
+            # Use existing percent_change ONLY if it looks sane (-50 to +50 range)
+            # Otherwise use calculated value
+            _h["change"] = _calc_pct
+            if _pct_chg_existing.notna().sum() > 0:
+                _sane_mask = _pct_chg_existing.abs() <= 50
+                _h.loc[_sane_mask, "change"] = _pct_chg_existing[_sane_mask]
 
             # ── Volume ────────────────────────────────────────────────────────
             if "volume" not in _h.columns:
@@ -1337,9 +1348,44 @@ html, body, [data-testid="stApp"] { background-color:#07091a !important; }
 /* ── Main content bg ── */
 .main .block-container { background:#0a0e1a !important; max-width:1400px !important; }
 
-/* ── Hide Streamlit branding ── */
-#MainMenu, footer, header { visibility:hidden !important; }
+/* ── Hide Streamlit branding (but keep hamburger menu visible) ── */
+#MainMenu { visibility:hidden !important; }
+footer { visibility:hidden !important; }
 [data-testid="stDecoration"] { display:none !important; }
+
+/* Show header on mobile so hamburger menu is accessible */
+@media (max-width: 768px) {
+    header[data-testid="stHeader"] {
+        visibility:visible !important;
+        background:#0b0f1a !important;
+        height:auto !important;
+        z-index:999 !important;
+    }
+    /* Make the sidebar toggle button more prominent on mobile */
+    button[data-testid="collapsedControl"],
+    button[kind="header"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="baseButton-header"] {
+        visibility:visible !important;
+        display:flex !important;
+        background:linear-gradient(135deg,#0ea5e9,#6366f1) !important;
+        color:#fff !important;
+        border-radius:8px !important;
+        padding:8px !important;
+        margin:8px !important;
+        box-shadow:0 2px 8px rgba(56,189,248,0.4) !important;
+    }
+    button[data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg {
+        color:#fff !important;
+        fill:#fff !important;
+    }
+}
+
+/* Desktop — keep header hidden as before */
+@media (min-width: 769px) {
+    header[data-testid="stHeader"] { visibility:hidden !important; }
+}
 </style>""", unsafe_allow_html=True)
 
 if "watchlist" not in st.session_state:
@@ -1656,13 +1702,6 @@ with st.sidebar:
     # ── Grouped navigation CSS ───────────────────────────────────────────────
     st.markdown("""
     <style>
-    .nav-group-label {
-        font-size:9px; font-weight:800; color:#334155;
-        text-transform:uppercase; letter-spacing:.14em;
-        padding:14px 0 6px 4px; display:block;
-        border-top:1px solid #1e2d3d; margin-top:4px;
-    }
-    .nav-group-label:first-child { border-top:none; padding-top:4px; }
     /* Hide default radio label */
     [data-testid="stRadio"] > label { display:none !important; }
     </style>""", unsafe_allow_html=True)
@@ -1674,21 +1713,6 @@ with st.sidebar:
         "Compare Stocks", "Advanced Charts", "AI Signals",
         "Portfolio", "Portfolio Simulator",
     ]
-
-    # Group label injected before these pages
-    _group_labels = {
-        "Overview":        "Markets",
-        "Compare Stocks":  "Analytics",
-        "Portfolio":       "Portfolio",
-    }
-
-    # Render group labels + radio
-    for _pg in _all_pages:
-        if _pg in _group_labels:
-            st.markdown(
-                f'<span class="nav-group-label">{_group_labels[_pg]}</span>',
-                unsafe_allow_html=True
-            )
 
     page = st.radio(
         "Navigation",
@@ -1786,6 +1810,29 @@ symbols = sorted(df_live["symbol"].dropna().tolist()) if not df_live.empty else 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: OVERVIEW
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Mobile menu hint ─────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+.mobile-menu-hint {
+    display:none;
+    background:linear-gradient(135deg,rgba(14,165,233,0.15),rgba(99,102,241,0.15));
+    border:1px solid #1e3a5f;
+    border-radius:10px;
+    padding:8px 14px;
+    margin-bottom:1rem;
+    font-size:12px;
+    color:#94a3b8;
+    text-align:center;
+}
+@media (max-width:768px){
+    .mobile-menu-hint { display:block !important; }
+}
+</style>
+<div class="mobile-menu-hint">
+    👈 Tap the menu icon at the top-left to navigate between pages
+</div>
+""", unsafe_allow_html=True)
 
 if page == "Overview":
 
@@ -3234,75 +3281,80 @@ elif page == "Stock Detail":
         </div>""", unsafe_allow_html=True)
 
     # Main chart — price / volume / RSI / MACD
-    fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True,
-        row_heights=[0.55, 0.20, 0.25],
-        vertical_spacing=0.04,
-        subplot_titles=("Price & Volume", "RSI (14)", "MACD (12/26/9)"),
-    )
+    if hist.empty or "RSI" not in hist.columns:
+        st.info("Not enough historical data yet to plot RSI/MACD charts. "
+                "Data builds daily as the app runs during market hours.")
+    else:
+        fig = make_subplots(
+            rows=3, cols=1, shared_xaxes=True,
+            row_heights=[0.55, 0.20, 0.25],
+            vertical_spacing=0.04,
+            subplot_titles=("Price & Volume", "RSI (14)", "MACD (12/26/9)"),
+        )
 
-    fig.add_trace(go.Scatter(x=hist["date"], y=hist["price"],
-        name="Price", line=dict(color="#378ADD", width=2)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=hist["date"], y=hist["price"],
+            name="Price", line=dict(color="#378ADD", width=2)), row=1, col=1)
 
-    if show_bb and "BB_Upper" in hist.columns:
-        fig.add_trace(go.Scatter(x=hist["date"], y=hist["BB_Upper"],
-            line=dict(color="#888780", width=1, dash="dot"), showlegend=False), row=1, col=1)
-        fig.add_trace(go.Scatter(x=hist["date"], y=hist["BB_Lower"],
-            line=dict(color="#888780", width=1, dash="dot"),
-            fill="tonexty", fillcolor="rgba(136,135,128,0.08)", showlegend=False), row=1, col=1)
+        if show_bb and "BB_Upper" in hist.columns:
+            fig.add_trace(go.Scatter(x=hist["date"], y=hist["BB_Upper"],
+                line=dict(color="#888780", width=1, dash="dot"), showlegend=False), row=1, col=1)
+            fig.add_trace(go.Scatter(x=hist["date"], y=hist["BB_Lower"],
+                line=dict(color="#888780", width=1, dash="dot"),
+                fill="tonexty", fillcolor="rgba(136,135,128,0.08)", showlegend=False), row=1, col=1)
 
-    if show_sma and "SMA50" in hist.columns:
-        fig.add_trace(go.Scatter(x=hist["date"], y=hist["SMA50"],
-            name="SMA 50", line=dict(color="#EF9F27", width=1.5)), row=1, col=1)
+        if show_sma and "SMA50" in hist.columns:
+            fig.add_trace(go.Scatter(x=hist["date"], y=hist["SMA50"],
+                name="SMA 50", line=dict(color="#EF9F27", width=1.5)), row=1, col=1)
 
-    vol_colors = ["#1D9E75" if c >= 0 else "#E24B4A" for c in hist["change"].fillna(0)]
-    fig.add_trace(go.Bar(x=hist["date"], y=hist["volume"],
-        name="Volume", marker_color=vol_colors, opacity=0.5), row=1, col=1)
+        vol_colors = ["#1D9E75" if c >= 0 else "#E24B4A" for c in hist["change"].fillna(0)]
+        fig.add_trace(go.Bar(x=hist["date"], y=hist["volume"],
+            name="Volume", marker_color=vol_colors, opacity=0.5), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=hist["date"], y=hist["RSI"],
-        name="RSI", line=dict(color="#7F77DD", width=1.5)), row=2, col=1)
-    fig.add_hline(y=70, line_dash="dot", line_color="#E24B4A", opacity=0.5, row=2, col=1)
-    fig.add_hline(y=30, line_dash="dot", line_color="#1D9E75", opacity=0.5, row=2, col=1)
+        fig.add_trace(go.Scatter(x=hist["date"], y=hist["RSI"],
+            name="RSI", line=dict(color="#7F77DD", width=1.5)), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="#E24B4A", opacity=0.5, row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="#1D9E75", opacity=0.5, row=2, col=1)
 
-    fig.add_trace(go.Scatter(x=hist["date"], y=hist["MACD"],
-        name="MACD", line=dict(color="#378ADD", width=1.5)), row=3, col=1)
-    fig.add_trace(go.Scatter(x=hist["date"], y=hist["Signal"],
-        name="Signal", line=dict(color="#EF9F27", width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=hist["date"], y=hist["MACD"],
+            name="MACD", line=dict(color="#378ADD", width=1.5)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=hist["date"], y=hist["Signal"],
+            name="Signal", line=dict(color="#EF9F27", width=1.5)), row=3, col=1)
 
-    hist_colors = ["#1D9E75" if v >= 0 else "#E24B4A" for v in hist["MACD_Hist"].fillna(0)]
-    fig.add_trace(go.Bar(x=hist["date"], y=hist["MACD_Hist"],
-        name="Histogram", marker_color=hist_colors, opacity=0.6), row=3, col=1)
+        hist_colors = ["#1D9E75" if v >= 0 else "#E24B4A" for v in hist["MACD_Hist"].fillna(0)]
+        fig.add_trace(go.Bar(x=hist["date"], y=hist["MACD_Hist"],
+            name="Histogram", marker_color=hist_colors, opacity=0.6), row=3, col=1)
 
-    fig.update_layout(
-        height=620, margin=dict(l=0, r=0, t=40, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01),
-        hovermode="x unified", xaxis_rangeslider_visible=False,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-    )
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.1)")
-    fig.update_xaxes(showgrid=False)
-    st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            height=620, margin=dict(l=0, r=0, t=40, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01),
+            hovermode="x unified", xaxis_rangeslider_visible=False,
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        )
+        fig.update_yaxes(showgrid=True, gridcolor="rgba(128,128,128,0.1)")
+        fig.update_xaxes(showgrid=False)
+        st.plotly_chart(fig, use_container_width=True)
 
-    # RSI signal banner
-    rsi_vals = hist["RSI"].dropna()
-    if not rsi_vals.empty:
-        rsi = rsi_vals.iloc[-1]
-        if rsi > 70:
-            st.warning(f"RSI {rsi:.1f} — overbought (>70). Consider taking profits.")
-        elif rsi < 30:
-            st.info(f"RSI {rsi:.1f} — oversold (<30). Potential buying opportunity.")
-        else:
-            st.success(f"RSI {rsi:.1f} — neutral zone.")
+        # RSI signal banner
+        rsi_vals = hist["RSI"].dropna()
+        if not rsi_vals.empty:
+            rsi = rsi_vals.iloc[-1]
+            if rsi > 70:
+                st.warning(f"RSI {rsi:.1f} — overbought (>70). Consider taking profits.")
+            elif rsi < 30:
+                st.info(f"RSI {rsi:.1f} — oversold (<30). Potential buying opportunity.")
+            else:
+                st.success(f"RSI {rsi:.1f} — neutral zone.")
 
-    # Raw data expander
-    with st.expander("View raw data"):
-        raw = hist[["date", "price", "volume", "RSI", "MACD", "Signal"]].copy()
-        raw["date"]   = raw["date"].dt.strftime("%Y-%m-%d")
-        raw["price"]  = raw["price"].map("{:.2f}".format)
-        raw["RSI"]    = raw["RSI"].map(lambda x: f"{x:.1f}"  if pd.notna(x) else "—")
-        raw["MACD"]   = raw["MACD"].map(lambda x: f"{x:.4f}" if pd.notna(x) else "—")
-        raw["Signal"] = raw["Signal"].map(lambda x: f"{x:.4f}" if pd.notna(x) else "—")
-        st.dataframe(raw.iloc[::-1], use_container_width=True, hide_index=True)
+    # Raw data expander — only show if we have indicators
+    if not hist.empty and "RSI" in hist.columns:
+        with st.expander("View raw data"):
+            raw = hist[["date", "price", "volume", "RSI", "MACD", "Signal"]].copy()
+            raw["date"]   = raw["date"].dt.strftime("%Y-%m-%d")
+            raw["price"]  = raw["price"].map("{:.2f}".format)
+            raw["RSI"]    = raw["RSI"].map(lambda x: f"{x:.1f}"  if pd.notna(x) else "—")
+            raw["MACD"]   = raw["MACD"].map(lambda x: f"{x:.4f}" if pd.notna(x) else "—")
+            raw["Signal"] = raw["Signal"].map(lambda x: f"{x:.4f}" if pd.notna(x) else "—")
+            st.dataframe(raw.iloc[::-1], use_container_width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
