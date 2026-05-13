@@ -4829,3 +4829,5 @@ elif page == "Portfolio Simulator":
                 Dividend estimate uses 2% annual yield approximation.
                 Not financial advice.</div>
             </div>""", unsafe_allow_html=True)
+
+# Synced Wed May 13 20:03:38 GMTDT 2026
